@@ -1,0 +1,79 @@
+@font-face {
+    font-family: 'hackbold';
+    src: url('hack-bold-webfont.woff2') format('woff2'),
+         url('hack-bold-webfont.woff') format('woff'),
+         url('hack-bold-webfont.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+
+}
+
+@font-face {
+    font-family: 'hackbold_italic';
+    src: url('hack-bolditalic-webfont.woff2') format('woff2'),
+         url('hack-bolditalic-webfont.woff') format('woff'),
+         url('hack-bolditalic-webfont.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+
+}
+
+@font-face {
+    font-family: 'hackitalic';
+    src: url('hack-italic-webfont.woff2') format('woff2'),
+         url('hack-italic-webfont.woff') format('woff'),
+         url('hack-italic-webfont.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+
+}
+
+@font-face {
+    font-family: 'hackregular';
+    src: url('hack-regular-webfont.woff2') format('woff2'),
+         url('hack-regular-webfont.woff') format('woff'),
+         url('hack-regular-webfont.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+
+}
+
+@font-face {
+    font-family: 'space_monobold';
+    src: url('spacemono-bold-webfont.woff2') format('woff2'),
+         url('spacemono-bold-webfont.woff') format('woff'),
+         url('spacemono-bold-webfont.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+
+}
+
+@font-face {
+    font-family: 'space_monobold_italic';
+    src: url('spacemono-bolditalic-webfont.woff2') format('woff2'),
+         url('spacemono-bolditalic-webfont.woff') format('woff'),
+         url('spacemono-bolditalic-webfont.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+
+}
+
+@font-face {
+    font-family: 'space_monoitalic';
+    src: url('spacemono-italic-webfont.woff2') format('woff2'),
+         url('spacemono-italic-webfont.woff') format('woff'),
+         url('spacemono-italic-webfont.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+
+}
+
+@font-face {
+    font-family: 'space_monoregular';
+    src: url('spacemono-regular-webfont.woff2') format('woff2'),
+         url('spacemono-regular-webfont.woff') format('woff'),
+         url('spacemono-regular-webfont.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+
+}
