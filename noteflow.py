@@ -16,8 +16,14 @@ from typing import Optional
 
 app = FastAPI()
 
-# Mount the static files directory
+# Mount the local directories
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+app.mount("/fonts", StaticFiles(directory=Path(__file__).parent / "fonts"), name="fonts")
+
+# Serve the fonts
+@app.get("/fonts/{path:path}")
+async def serve_fonts(path: str):
+    return StaticFiles(directory=Path(__file__).parent / "fonts")(path)
 
 # Serve the favicon
 @app.get("/favicon.ico")
@@ -25,7 +31,7 @@ async def favicon():
     return RedirectResponse(url="/static/favicon.ico")
 
 # Enhanced regex to match "[ ] task", "- [ ] task", and sub-bullets like "  - [ ] task"
-checkbox_pattern = re.compile(r'^\s*[-*+]? *(\[\s*([ xX])\s*\]) .+')
+checkbox_pattern = re.compile(r'^(\s*[-*+]? *\[)([xX ]?)(\] .+)')
 
 # Data model for new notes
 class Note(BaseModel):
@@ -102,16 +108,80 @@ async def get_index():
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Project Notes</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.7.2/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {}
+            },
+            daisyui: {
+                themes: ["light", "dark"],
+            },
+        }
+    </script>
     <style>
+        @font-face {
+            font-family: 'space_monoregular';
+            src: url('/fonts/spacemono-regular-webfont.woff2') format('woff2'),
+                 url('/fonts/spacemono-regular-webfont.woff') format('woff'),
+                 url('/fonts/spacemono-regular-webfont.ttf') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap; /* This helps prevent invisible text during loading */
+        }
+        @font-face {
+            font-family: 'space_monobold';
+            src: url('/fonts/spacemono-bold-webfont.woff2') format('woff2'),
+                 url('/fonts/spacemono-bold-webfont.woff') format('woff'),
+                 url('/fonts/spacemono-bold-webfont.ttf') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+        }
+        @font-face {
+            font-family: 'space_monobold_italic';
+            src: url('/fonts/spacemono-bolditalic-webfont.woff2') format('woff2'),
+                 url('/fonts/spacemono-bolditalic-webfont.woff') format('woff'),
+                 url('/fonts/spacemono-bolditalic-webfont.ttf') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+        }
+        @font-face {
+            font-family: 'space_monoitalic';
+            src: url('/fonts/spacemono-italic-webfont.woff2') format('woff2'),
+                 url('/fonts/spacemono-italic-webfont.woff') format('woff'),
+                 url('/fonts/spacemono-italic-webfont.ttf') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+        }
+
+        body {
+            font-family: 'space_monoregular', Arial, sans-serif;
+        }
+
         .note-content img { max-width: 100%; }
         .note-content { scroll-margin-top: 100px; }
         
         .markdown-body {
             padding: 1rem;
-            background: white;
             border-radius: 0.5rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        /* First level bullets */
+        .markdown-body ul li::before {
+            content: "*";
+            display: inline-block;
+            width: 1em;
+            margin-left: -1em;
+        }
+        /* Second level bullets */
+        .markdown-body ul ul li::before {
+            content: "›";
+            margin-left: -1em;
+}
+        /* Third level bullets */
+        .markdown-body ul ul ul li::before {
+            content: "»";
+            margin-left: -1em;
         }
         .markdown-body ul,
         .markdown-body ol {
@@ -204,31 +274,31 @@ async def get_index():
         }
     </style>
 </head>
-<body class="bg-gray-50">
-    <div class="fixed-header w-full" id="header">
+<body class="min-h-screen bg-base-200" data-theme="light">
+    <div class="fixed-header bg-base-100">
         <div class="w-full py-2 px-4">
             <div class="flex w-full">
                 <!-- Left side: Form (65%) -->
-                <div class="w-2/3 pr-4"> <!-- Adjusted to w-2/3 for 65% width -->
+                <div class="w-2/3 pr-4">
                     <form id="noteForm" class="w-full">
                         <div class="flex w-full mb-2">
-                            <label for="noteTitle" class="w-32 flex-shrink-0 text-sm font-medium text-gray-700">Note Title:</label>
+                            <label for="noteTitle" class="w-32 flex-shrink-0 label">Note Title:</label>
                             <div class="flex-1">
                                 <input 
                                     type="text" 
                                     id="noteTitle" 
                                     name="noteTitle"
-                                    class="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
+                                    class="input input-bordered w-full" 
                                     placeholder="Enter note title..."
                                 >
                             </div>
                         </div>
                         <div class="flex w-full">
                             <div class="w-32 flex-shrink-0 flex flex-col justify-between">
-                                <label for="noteInput" class="text-sm font-medium text-gray-700">New Note:</label>
+                                <label for="noteInput" class="label">New Note:</label>
                                 <button 
                                     type="submit" 
-                                    class="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                                    class="btn btn-primary"
                                 >
                                     Add Note
                                 </button>
@@ -237,7 +307,7 @@ async def get_index():
                                 <textarea 
                                     id="noteInput" 
                                     name="noteInput"
-                                    class="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 overflow-hidden resize-vertical"
+                                    class="textarea textarea-bordered w-full" 
                                     rows="5"
                                     placeholder="Enter your note in Markdown format..."
                                 ></textarea>
@@ -247,8 +317,8 @@ async def get_index():
                 </div>
                 
                 <!-- Right side: Active Tasks (35%) -->
-                <div class="w-1/3 border-l pl-4"> <!-- Adjusted to w-1/3 for 35% width -->
-                    <h3 class="text-lg font-semibold mb-2 text-gray-700">Active Tasks</h3>
+                <div class="w-1/3 border-l pl-4">
+                    <h3 class="text-lg font-semibold mb-2">Active Tasks</h3>
                     <div id="activeTasks" class="space-y-1 overflow-y-auto">
                         <!-- Tasks will be populated here -->
                     </div>
@@ -460,7 +530,6 @@ async def update_checkbox(request: UpdateNoteRequest):
                     return {"status": "success"}
                 current_index += 1
     
-    # If we didn't find the checkbox, still return success since the file was updated
     return {"status": "success"}
 
 def main():
