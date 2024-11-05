@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, HTTPException, Path, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -13,12 +13,18 @@ import sys
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 from typing import Optional
+from urllib.parse import quote, unquote
+import os
 
 app = FastAPI()
 
 # Mount the local directories
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.mount("/fonts", StaticFiles(directory=Path(__file__).parent / "fonts"), name="fonts")
+app.mount("/assets", StaticFiles(directory="assets"), name="assets")
+
+# Define the new separator
+NOTE_SEPARATOR = "\n---\n"
 
 # Serve the fonts
 @app.get("/fonts/{path:path}")
@@ -108,18 +114,6 @@ async def get_index():
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Project Notes</title>
-    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.7.2/dist/full.min.css" rel="stylesheet" type="text/css" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {}
-            },
-            daisyui: {
-                themes: ["light", "dark"],
-            },
-        }
-    </script>
     <style>
         @font-face {
             font-family: 'space_monoregular';
@@ -156,45 +150,197 @@ async def get_index():
         }
 
         body {
+            margin: 0;
+            padding: 0;
+            background-color: #1e3c72;
+            color: #000;
             font-family: 'space_monoregular', Arial, sans-serif;
+        }
+
+        .container {
+            display: flex;
+            max-width: 100%;
+            margin: 0 auto;
+            padding: 15px;
+            gap: 15px;
+        }
+
+        .site-title {
+            background-color: #000;
+            color: #ff8c00;
+            padding: 1px 10px;
+            font-family: monospace;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+        }
+
+        .site-title a {
+            color: #ff8c00;
+            text-decoration: none;
+        }
+
+        .site-path {
+            margin-left: 10px;
+            color: #666;
+        }
+
+        .left-column, .right-column {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .left-column {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            width: 100%;
+        }
+
+        .right-column {
+            flex: 0 0 325px;
+            width: 325px;
+        }
+
+        .input-box {
+            background: white;
+            margin-top: -15px;
+            padding: 5px;
+            border: 1px solid #000;
+            border-top-left-radius: 0px;
+            border-top-right-radius: 0px;
+            border-bottom-right-radius: 7px;
+            border-bottom-left-radius: 7px; 
+            box-sizing: border-box;
+        }
+
+        .task-box {
+            background: white;
+            margin-top: -15px;
+            padding: 5px;
+            border: 1px solid #000;
+            border-top-left-radius: 0px;
+            border-top-right-radius: 0px;
+            border-bottom-right-radius: 7px;
+            border-bottom-left-radius: 7px; 
+            box-sizing: border-box;
+        }
+
+        .links-box {
+            background: white;
+            padding: 5px;
+            border: 1px solid #000;
+            border-top-left-radius: 0px;
+            border-top-right-radius: 7px;
+            border-bottom-right-radius: 7px;
+            border-bottom-left-radius: 7px; 
+        }
+
+        .input-box textarea {
+            width: 100%;
+            box-sizing: border-box;
+            resize: vertical;
+            min-height: 100px;
+            font-family: inherit;
+            padding: 8px;
+            border: 1px solid #ccc;
+        }
+
+        .section-container {
+            position: relative;
+            margin-bottom: 5px;
+            margin-top: 5px;
+            margin-left: 2px;
+        }
+
+        .section-label {
+            position: absolute;
+            top: 0;
+            left: -18px;
+            background: #000;
+            color: #ff8c00;
+            padding: 2px 2px 2px 2px;
+            font-family: monospace;
+            font-size: 10px;
+            display: inline-flex;
+            flex-direction: column;
+            line-height: 1;
+            text-transform: lowercase;
+            width: 15px;
+            border-radius: 7px 0 0 7px;
+        }
+
+        .section-label span {
+            display: block;
+            text-align: center;
+            padding: 1px 1px 0.5px 1px;
+        }
+
+        .notes-item {
+            background: white;
+            padding-left: 5px;
+            padding-top: 15px;
+            padding-right: 5px;
+            padding-bottom: 5px;
+            margin-right: 15px;
+            border: 1px solid #000;
+            border-top-left-radius: 0px;
+            border-top-right-radius: 7px;
+            border-bottom-right-radius: 7px;
+            border-bottom-left-radius: 7px; 
+        }
+
+        .post-header {
+            font-weight: normal;
+            font-size: 10px;
+            margin-top: -10px;
+            margin-bottom: 10px;
+            color: #666;
+        }
+
+        .links-box a {
+            color: blue;
+            text-decoration: none;
+            display: block;
+            padding: 2px 0;
         }
 
         .note-content img { max-width: 100%; }
         .note-content { scroll-margin-top: 100px; }
         
         .markdown-body {
-            padding: 1rem;
-            border-radius: 0.5rem;
+            font-size: 0.9rem;  /* Make all markdown content slightly smaller */
         }
         /* First level bullets */
-        .markdown-body ul li::before {
-            content: "*";
-            display: inline-block;
-            width: 1em;
-            margin-left: -1em;
+        .markdown-body ul {
+            list-style-type: disc;  /* First level bullets */
         }
         /* Second level bullets */
-        .markdown-body ul ul li::before {
-            content: "›";
-            margin-left: -1em;
-}
+        .markdown-body ul ul {
+            list-style-type: circle;  /* Second level bullets */
+        }
         /* Third level bullets */
-        .markdown-body ul ul ul li::before {
-            content: "»";
-            margin-left: -1em;
+        .markdown-body ul ul ul {
+            list-style-type: square;  /* Third level bullets */
         }
         .markdown-body ul,
         .markdown-body ol {
             list-style-position: outside;
-            padding-left: 1.5rem;
-            margin-top: 0.15rem;
-            margin-bottom: 0.15rem;
+            padding-left: 1.5em;  /* Reduced from 2em */
+            margin-top: 0.1rem;   /* Reduced from 0.15rem */
+            margin-bottom: 0.1rem;
         }
         .markdown-body li {
-            margin-bottom: 0.15rem;
+            margin-bottom: 0.1rem;  /* Reduced from 0.15rem */
         }
         .markdown-body input[type="checkbox"] {
             margin-right: 0.5rem;
+        }
+        .markdown-body h4 {
+            margin-top: 5px;
+            margin-bottom: 5px;
         }
         .markdown-body h2 {
             font-size: 1.5rem;
@@ -205,44 +351,18 @@ async def get_index():
         .markdown-body p {
             margin: 1rem 0;
         }
-        .note-timestamp {
-            display: block;
-            font-size: 0.75rem;
-            color: #6b7280;
-            margin-bottom: 0.5rem;
-        }
-
-        /* Adjust header and layout styles */
-        .fixed-header {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            background: white;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            z-index: 10;
-            padding-bottom: 1rem;
-        }
-
-        body {
-            margin-top: 150px;
-        }
 
         .notes-container {
-            max-width: 64rem;
-            margin-left: auto;
-            margin-right: auto;
-            padding-left: 1rem;
-            padding-right: 1rem;
+            width: 100%;
+            margin-left: 15px;
+            margin-right: 0;
+            padding-left: 0;
+            padding-right: 0;
         }
 
         /* Adjust the layout proportions */
         #noteForm {
             width: 100%;
-        }
-        .flex-1 {
-            flex: 1 1 0%;
-            min-width: 0;
         }
 
         /* Styles for Active Tasks */
@@ -262,8 +382,10 @@ async def get_index():
         #activeTasks .task-text {
             flex: 1;
             min-width: 0;
+            padding-top: 2px;
             word-break: break-word;
             white-space: pre-wrap; /* Maintain line breaks for long tasks */
+            font-size: 0.7rem;  /* Make task text smaller */
         }
 
         /* Adjust the "Add Note" button size */
@@ -272,63 +394,96 @@ async def get_index():
             padding: 0.25rem 0.5rem;
             font-size: 0.75rem;
         }
+
+        /***********************************
+        *        Code Block Styles         *
+        ***********************************/
+        pre {
+            background-color: #fdf6e3; /* Soft pastel blue background */
+            margin: 0 0;
+            padding: 0 0;
+        }
+        pre code {
+            background-color: #fdf6e3; /* Soft pastel blue background */
+            padding: 0.2em;  /* Reduced from 1em */
+            border-radius: 0.3em;
+            display: block;
+            overflow-x: auto;
+            font-size: 0.7rem;  /* Make code slightly smaller */
+        }  
+        .markdown-body pre code.hljs {
+            background-color: #fdf6e3; /* Soft pastel blue background */
+            padding: 0.3em !important;  /* Using !important as a fallback */
+            border-radius: 0.3em;
+            display: block;
+            overflow-x: auto;
+            font-size: 0.75rem;
+        }
+        .notes-item pre code {
+            background-color: #fdf6e3; /* Soft pastel blue background */
+            padding: 0.3em;
+            border-radius: 0.3em;
+            display: block;
+            overflow-x: auto;
+            font-size: 0.75rem;
+        }
+        /**********************************
+        *   END Code Block Styles         *
+        **********************************/
+
+        .input-box input[type="text"] {
+            width: 100%;
+            box-sizing: border-box;
+            font-family: inherit;
+            padding: 4px 8px;
+            border: 1px solid #ccc;
+            margin-bottom: 5px;
+            height: 18px;
+        }
+
+        .input-box textarea::placeholder {
+            font-size: 10px;  /* Adjust size as needed */
+            color: #999;      /* Optional: customize color */
+        }
+
+        .input-box input::placeholder {
+            font-size: 10px;  /* Adjust size as needed */
+            color: #999;      /* Optional: customize color */
+        }
+
+        /*=============================================
+        =            List and Checkbox Styles         =
+        =============================================*/
+
+
     </style>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
 </head>
-<body class="min-h-screen bg-base-200" data-theme="light">
-    <div class="fixed-header bg-base-100">
-        <div class="w-full py-2 px-4">
-            <div class="flex w-full">
-                <!-- Left side: Form (65%) -->
-                <div class="w-2/3 pr-4">
-                    <form id="noteForm" class="w-full">
-                        <div class="flex w-full mb-2">
-                            <label for="noteTitle" class="w-32 flex-shrink-0 label">Note Title:</label>
-                            <div class="flex-1">
-                                <input 
-                                    type="text" 
-                                    id="noteTitle" 
-                                    name="noteTitle"
-                                    class="input input-bordered w-full" 
-                                    placeholder="Enter note title..."
-                                >
-                            </div>
-                        </div>
-                        <div class="flex w-full">
-                            <div class="w-32 flex-shrink-0 flex flex-col justify-between">
-                                <label for="noteInput" class="label">New Note:</label>
-                                <button 
-                                    type="submit" 
-                                    class="btn btn-primary"
-                                >
-                                    Add Note
-                                </button>
-                            </div>
-                            <div class="flex-1">
-                                <textarea 
-                                    id="noteInput" 
-                                    name="noteInput"
-                                    class="textarea textarea-bordered w-full" 
-                                    rows="5"
-                                    placeholder="Enter your note in Markdown format..."
-                                ></textarea>
-                            </div>
-                        </div>
-                    </form>
+<body>
+    <div class="container">
+        <!-- Left Column -->
+        <div class="left-column">
+            <form id="noteForm">
+                <!-- Input Section -->
+                <div class="input-box">
+                    <input type="text" id="noteTitle" name="noteTitle" placeholder="Enter note title here...">
+                    <textarea id="noteInput" name="noteInput" placeholder="Enter note in Markdown format.."></textarea>
                 </div>
-                
-                <!-- Right side: Active Tasks (35%) -->
-                <div class="w-1/3 border-l pl-4">
-                    <h3 class="text-lg font-semibold mb-2">Active Tasks</h3>
-                    <div id="activeTasks" class="space-y-1 overflow-y-auto">
-                        <!-- Tasks will be populated here -->
-                    </div>
+
+                <!-- Notes Section -->
+                <div class="notes-container" id="notes">
                 </div>
+            </form>
+
+        </div>
+
+        <!-- Right Column -->
+        <div class="right-column">
+            <!-- Tasks Box -->
+            <div id="activeTasks"class="task-box">
             </div>
         </div>
-    </div>
-
-    <div class="notes-container" id="notesContainer">
-        <div id="notes" class="space-y-6"></div>
     </div>
 
     <script>
@@ -336,7 +491,47 @@ async def get_index():
             const response = await fetch('/api/notes');
             const html = await response.text();
             document.getElementById('notes').innerHTML = html;
+            document.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+            });
             await updateActiveTasks();
+        }
+
+        document.getElementById('noteForm').addEventListener('keydown', async (e) => {
+            if (e.ctrlKey && e.key === 'Enter') {
+                e.preventDefault();
+                await submitNoteForm();
+            }
+        });
+
+        async function submitNoteForm() {
+            const titleInput = document.getElementById('noteTitle');
+            const noteInput = document.getElementById('noteInput');
+            const title = titleInput.value.trim();
+            const content = noteInput.value.trim();
+            
+            if (!content) return;
+
+            try {
+                const response = await fetch('/api/notes', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, content })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to add note');
+                }
+                
+                titleInput.value = '';
+                noteInput.value = '';
+                noteInput.style.height = 'auto';
+
+                await loadNotes();
+            } catch (error) {
+                console.error('Error adding note:', error);
+                alert('Failed to add note');
+            }
         }
 
         document.getElementById('noteForm').addEventListener('submit', async (e) => {
@@ -429,12 +624,60 @@ async def get_index():
 
     if (uncheckedTasks.length === 0) {
         tasksContainer.innerHTML = '<div class="text-sm text-gray-500">No active tasks</div>';
-            }
+    }
         }
 
         document.addEventListener('DOMContentLoaded', updateActiveTasks);
 
+        document.getElementById('noteInput').placeholder = `Create note in MARKDOWN format... [Ctrl+Enter to save]
+Drag & Drop images to upload...
+
+# Scroll for Markdown Examples
+- [ ] Tasks
+- Bullets
+    - Sub-bullets
+- **Bold** and *italic*`;
         loadNotes();
+
+        const noteInput = document.getElementById('noteInput');
+
+        noteInput.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+
+        noteInput.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const response = await fetch('/api/upload-image', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (response.ok) {
+                        const { filePath } = await response.json();
+                        const markdownLink = `![${file.name}](<${filePath}>)`;
+                        insertAtCursor(noteInput, markdownLink);
+                    } else {
+                        alert('Failed to upload image');
+                    }
+                } catch (error) {
+                    console.error('Error uploading image:', error);
+                }
+            }
+        });
+
+        function insertAtCursor(input, textToInsert) {
+            const start = input.selectionStart;
+            const end = input.selectionEnd;
+            input.value = input.value.substring(0, start) + textToInsert + input.value.substring(end);
+            input.selectionStart = input.selectionEnd = start + textToInsert.length;
+        }
     </script>
 </body>
 </html>
@@ -445,11 +688,9 @@ async def get_notes():
     notes_file = init_notes_file()
     content = notes_file.read_text()
     
-    # Split content by note separator and filter out empty strings
-    notes = [note.strip() for note in content.split("===NOTE===") if note.strip()]
+    notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
     
     html_notes = []
-    # Initialize global checkbox_index
     global_checkbox_index = 0
     
     for note_index, note in enumerate(notes):
@@ -457,45 +698,51 @@ async def get_notes():
         timestamp = lines[0]
         note_content = '\n'.join(lines[1:])
         
-        # Initialize MarkdownIt and use the custom task list plugin
-        md = MarkdownIt()
-        task_list_plugin(md)
-        
-        # Prepare env with note_index and current global_checkbox_index
         env = {'note_index': note_index, 'checkbox_index': global_checkbox_index}
         
-        # Render the note content to HTML
-        rendered_content = md.render(note_content, env)
+        # Use the render_markdown function
+        rendered_content = render_markdown(note_content, env)
         
-        # Update the global_checkbox_index with the count of checkboxes in this note
         global_checkbox_index = env.get('checkbox_index')
         
-        # Wrap the timestamp and content in HTML
         html_note = f'''
-        <div class="markdown-body">
-            <span class="note-timestamp">{timestamp}</span>
-            {rendered_content}
+        <div class="section-container">
+            <div class="section-label">
+                <span>n</span>
+                <span>o</span>
+                <span>t</span>
+                <span>e</span>
+            </div>
+            <div class="notes-item markdown-body">
+                <div class="post-header">Posted: {timestamp}</div>
+                {rendered_content}
+            </div>
         </div>
         '''
         html_notes.append(html_note)
     
-    # Join all formatted notes
-    html_content = '\n<div class="my-4"></div>\n'.join(html_notes)
+    html_content = ''.join(html_notes)
     return HTMLResponse(html_content)
 
 @app.post("/api/notes")
 async def add_note(note: Note):
     notes_file = init_notes_file()
-    current_content = notes_file.read_text()
+    current_content = notes_file.read_text().strip()  # Remove any trailing whitespace
     
-    # Format new note with separators
+    # Format new note
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     title = f" - {note.title}" if note.title else ""
-    formatted_note = f"===NOTE===\n## {timestamp}{title}\n\n{note.content}\n"
+    formatted_note = f"## {timestamp}{title}\n\n{note.content}"
     
-    # Prepend to file (add to top)
+    # Combine with existing content
+    if current_content:
+        new_content = f"{formatted_note}\n{NOTE_SEPARATOR}\n{current_content}"
+    else:
+        new_content = formatted_note
+    
+    # Write back to file
     with notes_file.open('w') as f:
-        f.write(formatted_note + current_content)
+        f.write(new_content)
     
     return {"status": "success"}
 
@@ -507,7 +754,7 @@ class UpdateNoteRequest(BaseModel):
 async def update_checkbox(request: UpdateNoteRequest):
     notes_file = init_notes_file()
     content = notes_file.read_text()
-    notes = [note.strip() for note in content.split("===NOTE===") if note.strip()]
+    notes = [note.strip() for note in content.split("---") if note.strip()]
     
     checkbox_index = request.checkbox_index
     current_index = 0  # Global index to track checkbox positions
@@ -525,12 +772,44 @@ async def update_checkbox(request: UpdateNoteRequest):
                     lines[i] = new_line
                     # Update the note and write back to the file
                     notes[note_index] = '\n'.join(lines)
-                    updated_content = "\n===NOTE===\n".join(notes)
+                    updated_content = "\n---\n".join(notes)
                     notes_file.write_text(updated_content)
                     return {"status": "success"}
                 current_index += 1
     
     return {"status": "success"}
+
+@app.post("/api/upload-image")
+async def upload_image(file: UploadFile = File(...)):
+    assets_path = Path("assets/images")
+    assets_path.mkdir(parents=True, exist_ok=True)  # Create directories if they don't exist
+
+    file_path = assets_path / file.filename
+
+    with file_path.open("wb") as buffer:
+        buffer.write(await file.read())
+
+    return {"filePath": f"/assets/images/{file.filename}"}
+
+def render_markdown(content, env):
+    md = MarkdownIt()
+    task_list_plugin(md)
+    return md.render(content, env)
+
+def create_directories():
+    # Define the directories to be created
+    directories = [
+        Path("assets"),
+        Path("assets/images"),
+        Path("assets/sites")
+    ]
+    
+    # Create each directory if it doesn't exist
+    for directory in directories:
+        os.makedirs(directory, exist_ok=True)
+
+# Call this function at the start of your application
+create_directories()
 
 def main():
     # Get current directory name
