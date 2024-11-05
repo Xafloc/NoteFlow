@@ -15,6 +15,12 @@ from markdown_it.token import Token
 from typing import Optional
 from urllib.parse import quote, unquote
 import os
+from bs4 import BeautifulSoup
+import requests
+import base64
+import mimetypes
+import hashlib
+from urllib.parse import urljoin, urlparse
 
 app = FastAPI()
 
@@ -631,6 +637,7 @@ async def get_index():
 
         document.getElementById('noteInput').placeholder = `Create note in MARKDOWN format... [Ctrl+Enter to save]
 Drag & Drop images to upload...
+Start Links with + to archive websites...
 
 # Scroll for Markdown Examples
 - [ ] Tasks
@@ -727,12 +734,15 @@ async def get_notes():
 @app.post("/api/notes")
 async def add_note(note: Note):
     notes_file = init_notes_file()
-    current_content = notes_file.read_text().strip()  # Remove any trailing whitespace
+    current_content = notes_file.read_text().strip()
+    
+    # Process +https:// links in the content
+    processed_content = process_plus_links(note.content)
     
     # Format new note
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     title = f" - {note.title}" if note.title else ""
-    formatted_note = f"## {timestamp}{title}\n\n{note.content}"
+    formatted_note = f"## {timestamp}{title}\n\n{processed_content}"
     
     # Combine with existing content
     if current_content:
@@ -810,6 +820,78 @@ def create_directories():
 
 # Call this function at the start of your application
 create_directories()
+
+def archive_website(url):
+    """Archive a website to a single HTML file with embedded resources."""
+    try:
+        # Generate a filename based on just the domain
+        domain = urlparse(url).netloc
+        filename = f"{domain}.html"
+        filepath = Path("assets/sites") / filename
+
+        # If already archived, return existing path
+        if filepath.exists():
+            return str(filepath)
+
+        # Fetch the main page
+        response = requests.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Handle CSS
+        for css_tag in soup.find_all('link', rel='stylesheet'):
+            try:
+                css_url = urljoin(url, css_tag['href'])
+                css_content = requests.get(css_url).text
+                # Create data URI for CSS
+                css_b64 = base64.b64encode(css_content.encode()).decode()
+                css_tag['href'] = f'data:text/css;charset=utf-8;base64,{css_b64}'
+            except Exception as e:
+                print(f"Error processing CSS {css_url}: {e}")
+
+        # Handle JavaScript
+        for script in soup.find_all('script', src=True):
+            try:
+                js_url = urljoin(url, script['src'])
+                js_content = requests.get(js_url).text
+                # Create data URI for JavaScript
+                js_b64 = base64.b64encode(js_content.encode()).decode()
+                script['src'] = f'data:text/javascript;charset=utf-8;base64,{js_b64}'
+            except Exception as e:
+                print(f"Error processing JavaScript {js_url}: {e}")
+
+        # Handle images
+        for img in soup.find_all('img', src=True):
+            try:
+                img_url = urljoin(url, img['src'])
+                img_response = requests.get(img_url)
+                content_type = img_response.headers.get('content-type', 'image/jpeg')
+                # Create data URI for image
+                img_b64 = base64.b64encode(img_response.content).decode()
+                img['src'] = f'data:{content_type};base64,{img_b64}'
+            except Exception as e:
+                print(f"Error processing image {img_url}: {e}")
+
+        # Save the consolidated file
+        filepath.write_text(str(soup))
+        return str(filepath)
+
+    except Exception as e:
+        print(f"Error archiving website {url}: {e}")
+        return None
+
+def process_plus_links(content):
+    """Process +https:// links in the content and create local copies."""
+    def replace_link(match):
+        url = match.group(1)
+        local_path = archive_website(url)
+        if local_path:
+            return f'[{url}]({url}) ([local copy](/assets/sites/{Path(local_path).name}))'
+        return url
+
+    # Find +https:// links and process them
+    pattern = r'\+((https?://)[^\s]+)'
+    return re.sub(pattern, replace_link, content)
 
 def main():
     # Get current directory name
