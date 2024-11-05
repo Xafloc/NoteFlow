@@ -7,7 +7,7 @@
 
 NoteFlow transforms a single Markdown file into a modern web interface where notes and tasks coexist seamlessly. Let your thoughts flow naturally while keeping your tasks in check.
 
-![Screenshot placeholder - replace with actual app screenshot](/docs/screenshot.png)
+![Main View](/screenshot_1.png)
 
 ## Features
 
