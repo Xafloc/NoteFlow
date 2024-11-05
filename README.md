@@ -92,10 +92,6 @@ The application is built with:
 - Markdown-it for Markdown parsing
 - Highlight.js for code syntax highlighting
 
-## License
-
-[MIT License](LICENSE)
-
 <div align="center">
 Made with ❤️ for note-taking enthusiasts
 </div>
