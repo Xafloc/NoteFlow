@@ -1,19 +1,16 @@
 # NoteFlow
 
-![NoteFlow Banner](https://img.shields.io/badge/NoteFlow-A%20Natural%20Way%20to%20Take%20Notes-blue?style=for-the-badge)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=flat&logo=fastapi)](https://fastapi.tiangolo.com/)
+NoteFlow is a lightweight, Markdown-based note-taking application with task management capabilities. It provides a clean interface for creating, viewing, and managing notes with support for tasks, images, and code snippets.
 
-NoteFlow transforms a single Markdown file into a modern web interface where notes and tasks coexist seamlessly. Let your thoughts flow naturally while keeping your tasks in check.
+## Features
 
 ![Main View](/screenshot_1.png)
 
 ## Features
 
 - **📝 Continuous Flow**: All notes stream into a single Markdown file, creating a natural timeline
-- **✅ Live Task Dashboard**: Active tasks automatically surface to a dedicated panel
-- **🔍 Pure Markdown**: Write in plain Markdown with live preview and checkbox support
+- **✅ Active Tasks Tracking**: Active tasks automatically surface to a dedicated panel
+- **🔍 Pure Markdown**: Write in plain Markdown and use checkboxes for task management
 - **💾 Zero Database**: Your entire note history lives in one portable Markdown file
 - **🚀 Instant Start**: Zero configuration required - just launch and start writing
 - **🔒 Privacy First**: Runs entirely local - your notes never leave your machine
@@ -54,74 +51,50 @@ Your default browser will automatically open to `http://localhost:8000` (or anot
 
 ## Usage
 
-### Running NoteFlow
-
+1. Start the application:
 ```bash
 python noteflow.py
 ```
 
-### Taking Notes
+2. Your default web browser will automatically open to the application (typically at http://localhost:8000)
 
-- Type your note in the content area
-- Optionally add a title
-- Click "Add Note" or press Ctrl+Enter to save
+3. Create notes using Markdown syntax and give your note a title:
+   - Use `- [ ]` for tasks
+   - Drag and drop images directly into the editor
+   - Use standard Markdown syntax for formatting
+   - Press Ctrl+Enter to save notes
 
-### Creating Tasks
+## Directory Structure
 
-- Use Markdown checkboxes:
-  ```markdown
-  - [ ] New task
-  - [x] Completed task
-  ```
-- Tasks automatically appear in the Active Tasks panel
-- Click checkboxes to mark tasks as complete
-
-### Markdown Support
-
-NoteFlow supports standard Markdown syntax including:
-- Headers
-- Lists (bulleted and numbered)
-- Checkboxes
-- Bold/Italic text
-- Code blocks
-- And more!
-
-## File Structure
-
-Your notes are stored in `notes.md` in your working directory. The file format is simple:
-
-```markdown
-===NOTE===
-## 2024-10-30 12:34:56 - Optional Title
-
-Your note content here...
-
-===NOTE===
-## 2024-10-30 12:33:45
-
-Another note...
+```
+current_directory/
+├── assets/
+│   ├── images/    # Uploaded images
+│   └── sites/     # Site-related assets
+├── notes.md       # Notes storage file
 ```
 
-## Contributing
+## Markdown Support
 
-Contributions are welcome! Please feel free to submit a Pull Request. Note that by contributing to this project, you agree to license your contributions under the GNU General Public License v3.0.
+- Headers (`# H1`, `## H2`, etc.)
+- Lists (ordered and unordered)
+- Task lists (`- [ ]` and `- [x]`)
+- Code blocks with syntax highlighting
+- Images
+- Bold and italic text
+- Links
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+## Development
+
+The application is built with:
+- FastAPI for the backend
+- Pure JavaScript for frontend interactions
+- Markdown-it for Markdown parsing
+- Highlight.js for code syntax highlighting
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details. This license ensures that:
-
-- You can freely use, modify, and distribute this software
-- Any modifications or derivative works must also be licensed under GPL-3.0
-- The source code must be made available when distributing the software
-- Changes made to the code must be documented
-
-For more information, see the [full license text](https://www.gnu.org/licenses/gpl-3.0.en.html).
+[MIT License](LICENSE)
 
 <div align="center">
 Made with ❤️ for note-taking enthusiasts
