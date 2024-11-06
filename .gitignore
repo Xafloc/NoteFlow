@@ -7,6 +7,7 @@ assets/
 noteflow.egg-info/
 notes.md
 archived/
+dist/
 
 # Ignore Python virtual environment directory
 .venv/

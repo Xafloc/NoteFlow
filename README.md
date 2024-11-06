@@ -20,19 +20,23 @@ NoteFlow is a lightweight, Markdown-based note-taking application with task mana
 
 ## Quick Start
 
-```bash
-# Clone the repository
-git clone https://github.com/Xafloc/NoteFlow.git
-cd NoteFlow
+To quickly get started with Noteflow, follow these steps:
 
-# Install dependencies
-pip install -r requirements.txt
+1. **Install Noteflow**: Use pip to install the package:
 
-# Run NoteFlow
-python noteflow.py
-```
+   ```bash
+   pip install noteflow
+   ```
 
-Your default browser will automatically open to `http://localhost:8000` (or another available port if 8000 is in use).
+2. **Run Noteflow**: After installation, you can run Noteflow using the command line from any folder you'd like to take notes in:
+
+   ```bash
+   noteflow
+   ```
+
+3. **Access the Application**: Your web browser should open automatically, else open your web browser and navigate to `http://localhost:8000` to start using Noteflow.
+
+That's it! You're now ready to start using Noteflow for your note-taking needs.
 
 ## Requirements
 
@@ -41,22 +45,6 @@ Your default browser will automatically open to `http://localhost:8000` (or anot
 - uvicorn
 - markdown-it-py
 - Other dependencies listed in `requirements.txt`
-
-## Installation
-
-1. Ensure you have Python 3.7 or newer installed
-2. Clone this repository
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-## Usage
-
-1. Start the application:
-```bash
-python noteflow.py
-```
 
 ### Taking Notes
 
