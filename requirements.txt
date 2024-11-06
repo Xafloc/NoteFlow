@@ -8,3 +8,5 @@ pathlib>=1.0.1
 typing>=3.7.4.3
 aiofiles>=23.2.1
 jinja2>=3.1.2
+requests>=2.31.0
+beautifulsoup4>=4.12.0

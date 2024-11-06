@@ -22,12 +22,28 @@ import mimetypes
 import hashlib
 from urllib.parse import urljoin, urlparse
 
+def create_directories():
+    # Define the directories to be created relative to the current working directory
+    base_path = Path.cwd()
+    directories = [
+        base_path / "assets",
+        base_path / "assets/images",
+        base_path / "assets/sites"
+    ]
+    
+    # Create each directory if it doesn't exist
+    for directory in directories:
+        os.makedirs(directory, exist_ok=True)
+
+# Ensure directories are created before mounting
+create_directories()
+
 app = FastAPI()
 
 # Mount the local directories
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.mount("/fonts", StaticFiles(directory=Path(__file__).parent / "fonts"), name="fonts")
-app.mount("/assets", StaticFiles(directory="assets"), name="assets")
+app.mount("/assets", StaticFiles(directory=Path.cwd() / "assets"), name="assets")  # Use Path.cwd() to ensure correct path
 
 # Define the new separator
 NOTE_SEPARATOR = "\n---\n"
@@ -806,21 +822,6 @@ def render_markdown(content, env):
     task_list_plugin(md)
     return md.render(content, env)
 
-def create_directories():
-    # Define the directories to be created
-    directories = [
-        Path("assets"),
-        Path("assets/images"),
-        Path("assets/sites")
-    ]
-    
-    # Create each directory if it doesn't exist
-    for directory in directories:
-        os.makedirs(directory, exist_ok=True)
-
-# Call this function at the start of your application
-create_directories()
-
 def archive_website(url):
     """Archive a website to a single HTML file with embedded resources."""
     try:
@@ -894,6 +895,7 @@ def process_plus_links(content):
     return re.sub(pattern, replace_link, content)
 
 def main():
+    print("Running noteflow...")
     # Get current directory name
     current_dir = Path.cwd().name
     

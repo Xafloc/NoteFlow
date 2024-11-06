@@ -1,0 +1,2 @@
+recursive-include noteflow/static *
+recursive-include noteflow/fonts * 

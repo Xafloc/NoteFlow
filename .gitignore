@@ -1,6 +1,13 @@
 # Ignore macOS system files
 .DS_Store
 
+# Ignore Static files
+build/
+assets/
+noteflow.egg-info/
+notes.md
+archived/
+
 # Ignore Python virtual environment directory
 .venv/
 
