@@ -31,6 +31,7 @@ To quickly get started with Noteflow, follow these steps:
 2. **Install Noteflow**: Use Homebrew to install the package:
 
    ```bash
+   brew tap Xafloc/noteflow
    brew install noteflow
    ```
 
@@ -83,26 +84,16 @@ NoteFlow supports standard Markdown syntax including:
 Your notes are stored in `notes.md` in your working directory. The file format is simple:
 
 ```markdown
-===NOTE===
 ## 2024-10-30 12:34:56 - Optional Title
 
 Your note content here...
 
-===NOTE===
+---
+
 ## 2024-10-30 12:33:45
 
 Another note...
 ```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request. Note that by contributing to this project, you agree to license your contributions under the GNU General Public License v3.0.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
 
 ## License
 
