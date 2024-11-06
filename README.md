@@ -22,12 +22,17 @@ NoteFlow is a lightweight, Markdown-based note-taking application with task mana
 
 To quickly get started with Noteflow, follow these steps:
 
-1. **Install Noteflow**: Use pip to install the package:
+1a. **Install Noteflow**: Use pip to install the package:
 
    ```bash
    pip install noteflow
    ```
 
+1b. **Install Noteflow**: Use Homebrew to install the package:
+
+   ```bash
+   brew install noteflow
+   ```
 2. **Run Noteflow**: After installation, you can run Noteflow using the command line from any folder you'd like to take notes in:
 
    ```bash
