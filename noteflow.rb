@@ -1,4 +1,4 @@
-class Noteflow < Formula
+class noteflow < Formula
   include Language::Python::Virtualenv
 
   desc "NoteFlow is a lightweight, Markdown-based note-taking application with task management capabilities. It provides a clean interface for creating, viewing, and managing notes with support for tasks, images, and code snippets."
