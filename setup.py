@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='noteflow',
-    version='0.1',
+    version='0.1.1',
     author='@Xafloc',
     author_email='xafloc@tetrago.com',
     description='A simple one-big-note app with Markdown support',
@@ -18,6 +18,7 @@ setup(
         'requests>=2.31.0',
         'beautifulsoup4>=4.12.0',
         'pydantic',
+        'python-multipart',
     ],
     entry_points={
         'console_scripts': [
