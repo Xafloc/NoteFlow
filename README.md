@@ -6,6 +6,8 @@ NoteFlow is a lightweight, Markdown-based note-taking application with task mana
 
 ![Main View](/screenshot_1.png)
 
+![Local Site Copy](/screenshot_2.png)
+
 ## Features
 
 - **📝 Continuous Flow**: All notes stream into a single Markdown file, creating a natural timeline
