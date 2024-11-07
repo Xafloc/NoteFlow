@@ -8,6 +8,8 @@ NoteFlow is a lightweight, Markdown-based note-taking application with task mana
 
 ![Local Site Copy](/screenshot_2.png)
 
+![Site Link Example](/screenshot_3.png)
+
 ## Features
 
 - **📝 Continuous Flow**: All notes stream into a single Markdown file, creating a natural timeline
@@ -17,6 +19,7 @@ NoteFlow is a lightweight, Markdown-based note-taking application with task mana
 - **🚀 Instant Start**: Zero configuration required - just launch and start writing
 - **🔒 Privacy First**: Runs entirely local - your notes never leave your machine
 - **✨ Modern Interface**: Clean, responsive design built with FastAPI
+- **📚 Site Links and Archival**: Save site links, and generate a static HTML archive version of linked sites
 
 ## Quick Start
 
@@ -68,6 +71,16 @@ That's it! You're now ready to start using Noteflow for your note-taking needs.
   ```
 - Tasks automatically appear in the Active Tasks panel
 - Click checkboxes to mark tasks as complete
+
+### Attaching Images
+
+- Drag and drop images into the Noteflow input box to attach them to your note
+- Images are automatically embedded in the note and saved locally within the assets/images folder
+
+### Saving Site Links and Archiving
+
+- Create a link in your note by typing + followed by the URL (e.g., `+https://www.google.com`)
+- Site link will be saved and archived locally within the assets/sites folder
 
 ### Markdown Support
 
