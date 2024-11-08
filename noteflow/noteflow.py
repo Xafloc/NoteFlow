@@ -434,9 +434,6 @@ async def get_index():
             display: block;
             padding: 2px 0;
         }
-        .note-content img {
-            max-width: 100%;
-        }
         .note-content {
             scroll-margin-top: 100px;
         }
@@ -475,7 +472,7 @@ async def get_index():
             color: #2563eb;
         }
         .markdown-body p {
-            margin: 1rem 0;
+            margin: 5px 0;
         }
         .notes-container {
             width: 100%;
@@ -611,6 +608,14 @@ async def get_index():
         .archive-reference a:hover {
             color: #e6c989;
             text-decoration: underline;
+        }
+        .markdown-body img {
+            max-width: 100%;
+            max-height: 400px;
+            width: auto;
+            height: auto;
+            display: block;
+            margin: 10px auto;
         }
 
 
@@ -916,6 +921,26 @@ Start Links with + to archive websites...
                             input.selectionStart = input.selectionEnd = start + textToInsert.length;
                         }
 
+                        document.addEventListener('DOMContentLoaded', function() {
+                            const noteInput = document.getElementById('noteInput');
+                            
+                            noteInput.addEventListener('keydown', function(e) {
+                                if (e.key === 'Tab') {
+                                    e.preventDefault();
+                                    
+                                    // Get cursor position
+                                    const start = this.selectionStart;
+                                    const end = this.selectionEnd;
+                                    
+                                    // Insert tab at cursor position
+                                    this.value = this.value.substring(0, start) + '\t' + this.value.substring(end);
+                                    
+                                    // Move cursor after tab
+                                    this.selectionStart = this.selectionEnd = start + 1;
+                                }
+                            });
+                        });
+
                     </script>
                 </div>
             </div>
@@ -1088,6 +1113,35 @@ async def upload_image(file: UploadFile = File(...)):
 def render_markdown(content, env):
     md = MarkdownIt()
     task_list_plugin(md)
+    
+    # Add custom image renderer
+    def render_image(tokens, idx, options, env):
+        token = tokens[idx]
+        src = token.attrGet('src')
+        alt = token.content
+        title = token.attrGet('title')
+        
+        # Remove angle brackets if present (from drag-and-drop)
+        src = src.strip('<>')
+        
+        # Handle both local and remote images
+        if src.startswith(('http://', 'https://')):
+            # Remote image - use as is
+            img_url = src
+        else:
+            # Local image - ensure proper path
+            img_url = src if src.startswith('/') else f'/{src}'
+        
+        title_attr = f' title="{title}"' if title else ''
+        
+        # Wrap image in a link that opens in new window
+        return (
+            f'<a href="{img_url}" target="_blank" rel="noopener noreferrer">'
+            f'<img src="{img_url}" alt="{alt}"{title_attr}>'
+            f'</a>'
+        )
+    
+    md.renderer.rules['image'] = render_image
     return md.render(content, env)
 
 def clean_title(title):
