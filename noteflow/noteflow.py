@@ -617,6 +617,54 @@ async def get_index():
             display: block;
             margin: 10px auto;
         }
+        .edit-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+        }
+        .edit-container {
+            position: relative;
+            width: 80%;
+            max-width: 800px;
+            margin: 50px auto;
+            background: white;
+            padding: 5px;
+            border: 1px solid #000;
+            border-top-left-radius: 0px;
+            border-top-right-radius: 7px;
+            border-bottom-right-radius: 7px;
+            border-bottom-left-radius: 7px;
+            font-family: 'space_monoregular', Arial, sans-serif;
+        }
+        .edit-textarea {
+            width: 100%;
+            min-height: 300px;
+            margin: 10px 0;
+            padding: 8px;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            font-family: inherit;
+            font-size: 0.9rem;
+            resize: vertical;
+        }
+        .edit-buttons {
+            text-align: right;
+            padding: 5px;
+        }
+        .edit-button {
+            background: #000;
+            color: #ff8c00;
+            border: none;
+            padding: 5px 15px;
+            margin-left: 10px;
+            cursor: pointer;
+            font-family: inherit;
+        }
 
 
     </style>
@@ -941,6 +989,72 @@ Start Links with + to archive websites...
                             });
                         });
 
+                        let currentEditingNoteIndex = null;
+
+                        async function editNote(noteIndex) {
+                            currentEditingNoteIndex = noteIndex;
+                            
+                            try {
+                                const response = await fetch(`/api/notes/${noteIndex}`);
+                                if (!response.ok) throw new Error('Failed to fetch note');
+                                
+                                const noteData = await response.json();
+                                document.getElementById('editNoteContent').value = noteData.content;
+                                document.getElementById('editOverlay').style.display = 'block';
+                            } catch (error) {
+                                console.error('Error fetching note:', error);
+                                alert('Failed to load note for editing');
+                            }
+                        }
+
+                        async function saveNote() {
+                            if (currentEditingNoteIndex === null) return;
+                            
+                            const content = document.getElementById('editNoteContent').value;
+                            
+                            try {
+                                const response = await fetch(`/api/notes/${currentEditingNoteIndex}`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ content })
+                                });
+                                
+                                if (!response.ok) throw new Error('Failed to update note');
+                                
+                                // Close overlay and refresh notes
+                                closeEditOverlay();
+                                await loadNotes();
+                            } catch (error) {
+                                console.error('Error updating note:', error);
+                                alert('Failed to update note');
+                            }
+                        }
+
+                        function closeEditOverlay() {
+                            document.getElementById('editOverlay').style.display = 'none';
+                            currentEditingNoteIndex = null;
+                        }
+
+                        // Add tab capture for edit overlay textarea
+                        document.addEventListener('DOMContentLoaded', function() {
+                            const editNoteContent = document.getElementById('editNoteContent');
+                            
+                            editNoteContent.addEventListener('keydown', function(e) {
+                                if (e.key === 'Tab') {
+                                    e.preventDefault();
+                                    
+                                    // Get cursor position
+                                    const start = this.selectionStart;
+                                    const end = this.selectionEnd;
+                                    
+                                    // Insert tab at cursor position
+                                    this.value = this.value.substring(0, start) + '\t' + this.value.substring(end);
+                                    
+                                    // Move cursor after tab
+                                    this.selectionStart = this.selectionEnd = start + 1;
+                                }
+                            });
+                        });
                     </script>
                 </div>
             </div>
@@ -951,6 +1065,22 @@ Start Links with + to archive websites...
         <div style="text-align: center;">
             <div class="loading-spinner"></div>
             <div class="loading-text">Archiving website...</div>
+        </div>
+    </div>
+    <!-- Edit Note Overlay -->
+    <div id="editOverlay" class="edit-overlay">
+        <div class="edit-container">
+            <div class="section-label">
+                <span>e</span>
+                <span>d</span>
+                <span>i</span>
+                <span>t</span>
+            </div>
+            <textarea id="editNoteContent" class="edit-textarea"></textarea>
+            <div class="edit-buttons">
+                <button onclick="saveNote()" class="edit-button">Save</button>
+                <button onclick="closeEditOverlay()" class="edit-button">Cancel</button>
+            </div>
         </div>
     </div>
 </body>
@@ -987,16 +1117,64 @@ async def get_notes():
                 <span>e</span>
             </div>
             <div class="notes-item markdown-body">
-                <div class="post-header">Posted: {timestamp}</div>
+                <div class="post-header" onclick="editNote({note_index})" style="cursor: pointer;">
+                    Posted: {timestamp} <span style="color: #ff8c00;">(click to edit)</span>
+                </div>
                 {rendered_content}
             </div>
         </div>
         '''
         html_notes.append(html_note)
     
-    # Remove this line that was adding links to notes
     html_content = ''.join(html_notes)
     return HTMLResponse(html_content)
+
+# Add new endpoint to get a specific note
+@app.get("/api/notes/{note_index}")
+async def get_note(note_index: int):
+    notes_file = init_notes_file()
+    content = notes_file.read_text()
+    notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
+    
+    if 0 <= note_index < len(notes):
+        lines = notes[note_index].split('\n')
+        timestamp = lines[0]
+        note_content = '\n'.join(lines[1:])
+        return {"timestamp": timestamp, "content": note_content}
+    
+    raise HTTPException(status_code=404, detail="Note not found")
+
+# Add new endpoint to update a specific note
+@app.put("/api/notes/{note_index}")
+async def update_note(note_index: int, note: Note):
+    notes_file = init_notes_file()
+    content = notes_file.read_text()
+    notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
+    
+    if 0 <= note_index < len(notes):
+        # Process any new +https:// links in the updated content
+        processed_content = await process_plus_links(note.content)
+        
+        # Get the original timestamp from the note
+        original_timestamp = notes[note_index].split('\n')[0]
+        
+        # Format updated note with original timestamp
+        title = f" - {note.title}" if note.title else ""
+        formatted_note = f"{original_timestamp}{title}\n\n{processed_content.strip()}"  # Keep double newline after header
+        
+        # Replace the note at the specified index
+        notes[note_index] = formatted_note
+        
+        # Join all notes back together with consistent separator
+        updated_content = f"\n---\n\n".join(notes)  # Add newlines around separator
+        
+        # Write back to file
+        with notes_file.open('w') as f:
+            f.write(updated_content)
+        
+        return {"status": "success"}
+    
+    raise HTTPException(status_code=404, detail="Note not found")
 
 async def process_plus_links(content):
     """Process +https:// links in the content and create local copies."""
