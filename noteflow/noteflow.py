@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Path, UploadFile, File
+from fastapi import FastAPI, HTTPException, Path, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -20,6 +20,9 @@ import base64
 import mimetypes
 import hashlib
 from bs4 import BeautifulSoup
+import json
+from pathlib import Path
+import platformdirs  # You'll need to pip install platformdirs
 
 def saveFullHtmlPage(url, pagepath='page', session=requests.Session(), html=None):
     """Save web page html and supported contents"""
@@ -115,6 +118,130 @@ app.mount("/assets", StaticFiles(directory=Path.cwd() / "assets"), name="assets"
 # Define the new separator
 NOTE_SEPARATOR = "\n---\n"
 
+# Define available themes
+THEMES = {
+        'default-light': {
+         # Main colors
+        'background': '#1e3c72',          # Main background color
+        'accent': '#ff8c00',              # Accent color
+        'text_color': '#757575',          # Global text color
+
+        # Labels
+        'label_background': '#000000',    # Label backgrounds
+        'note_label_border': '#000000',   # Label borders
+        'links_label_border': '#000000',
+        'theme_label_border': '#000000',
+        'header_text': '#666666',         # Label text color
+
+        # Content boxes
+        'box_background': '#ffffff',      # Box backgrounds
+        'note_border': '#000000',         # Box borders
+        'tasks_border': '#000000',
+        'theme_border': '#000000',
+        'links_border': '#000000',
+
+        # Input fields
+        'input_background': '#ffffff',    # Input backgrounds
+        'input_border': '#26292c',        # Input borders
+
+        # Edit popup
+        'edit_overlay_background': '#313437',  # Popup overlay
+        'edit_background': '#ffffff',         # Popup background
+        'edit_border': '#000000',             # Popup border
+        'edit_input_background': '#ffffff',    # Popup input background
+        'edit_input_border': '#26292c',        # Popup input border
+
+        # Code highlighting
+        'code_background': '#fdf6e3',     # Code block background
+        'code_style': 'github',           # Highlight.js theme
+
+        # Button Colors
+        'button_bg': '#313437',
+        'button_text': '#ff8c00',
+    },
+    'default-dark': {
+         # Main colors
+        'background': '#1e3c72',          # Main background color
+        'accent': '#ff8c00',              # Accent color
+        'text_color': '#757575',          # Global text color
+
+        # Labels
+        'label_background': '#000000',    # Label backgrounds
+        'note_label_border': '#000000',   # Label borders
+        'links_label_border': '#000000',
+        'theme_label_border': '#000000',
+        'header_text': '#666666',         # Label text color
+
+        # Content boxes
+        'box_background': '#26292c',      # Box backgrounds
+        'note_border': '#000000',         # Box borders
+        'tasks_border': '#000000',
+        'theme_border': '#000000',
+        'links_border': '#000000',
+
+        # Input fields
+        'input_background': '#313437',    # Input backgrounds
+        'input_border': '#26292c',        # Input borders
+
+        # Edit popup
+        'edit_overlay_background': '#313437',  # Popup overlay
+        'edit_background': '#26292c',         # Popup background
+        'edit_border': '#000000',             # Popup border
+        'edit_input_background': '#26292c',    # Popup input background
+        'edit_input_border': '#26292c',        # Popup input border
+
+        # Code highlighting
+        'code_background': '#fdf6e3',     # Code block background
+        'code_style': 'github',           # Highlight.js theme
+
+        # Button Colors
+        'button_bg': '#313437',
+        'button_text': '#ff8c00',
+    },
+    'dark-orange': {
+        # Main colors
+        'background': '#313437',          # Main background color
+        'accent': '#df8a3e',              # Accent color
+        'text_color': '#757575',          # Global text color
+
+        # Labels
+        'label_background': '#313437',    # Label backgrounds
+        'note_label_border': '#000000',   # Label borders
+        'links_label_border': '#000000',
+        'theme_label_border': '#000000',
+        'header_text': '#5084a7',         # Label text color
+
+        # Content boxes
+        'box_background': '#26292c',      # Box backgrounds
+        'note_border': '#000000',         # Box borders
+        'tasks_border': '#000000',
+        'theme_border': '#000000',
+        'links_border': '#000000',
+
+        # Input fields
+        'input_background': '#26292c',    # Input backgrounds
+        'input_border': '#26292c',        # Input borders
+
+        # Edit popup
+        'edit_overlay_background': '#313437',  # Popup overlay
+        'edit_background': '#26292c',         # Popup background
+        'edit_border': '#000000',             # Popup border
+        'edit_input_background': '#26292c',    # Popup input background
+        'edit_input_border': '#26292c',        # Popup input border
+
+        # Code highlighting
+        'code_background': '#fdf6e3',     # Code block background
+        'code_style': 'github',           # Highlight.js theme
+
+        # Button Colors
+        'button_bg': '#313437',
+        'button_text': '#ff8c00',
+    }
+}
+
+# Manual theme selector (change this value to test different themes)
+CURRENT_THEME = 'default-dark'  # Change to 'dark' to test dark theme
+
 # Serve the fonts
 @app.get("/fonts/{path:path}")
 async def serve_fonts(path: str):
@@ -196,40 +323,37 @@ def task_list_plugin(md):
 # API routes
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
-    return """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Notes</title>
+    # Get colors for current theme
+    colors = THEMES[CURRENT_THEME]
+    
+    themed_styles = f"""
     <style>
-        @font-face {
+        @font-face {{
             font-family: 'space_monoregular';
             src: url('/fonts/spacemono-regular-webfont.woff2') format('woff2'),url('/fonts/spacemono-regular-webfont.woff') format('woff'),url('/fonts/spacemono-regular-webfont.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
             font-display: swap;
-        }
-        @font-face {
+        }}
+        @font-face {{
             font-family: 'space_monobold';
             src: url('/fonts/spacemono-bold-webfont.woff2') format('woff2'),url('/fonts/spacemono-bold-webfont.woff') format('woff'),url('/fonts/spacemono-bold-webfont.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
-        }
-        @font-face {
+        }}
+        @font-face {{
             font-family: 'space_monobold_italic';
             src: url('/fonts/spacemono-bolditalic-webfont.woff2') format('woff2'),url('/fonts/spacemono-bolditalic-webfont.woff') format('woff'),url('/fonts/spacemono-bolditalic-webfont.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
-        }
-        @font-face {
+        }}
+        @font-face {{
             font-family: 'space_monoitalic';
             src: url('/fonts/spacemono-italic-webfont.woff2') format('woff2'),url('/fonts/spacemono-italic-webfont.woff') format('woff'),url('/fonts/spacemono-italic-webfont.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
-        }
-        @font-face {
+        }}
+        @font-face {{
             font-family: 'hackregular';
             src: url('/fonts/hack-regular-webfont.woff2') format('woff2'),
             url('/fonts/hack-regular-webfont.woff') format('woff'),
@@ -237,80 +361,80 @@ async def get_index():
             font-weight: normal;
             font-style: normal;
             font-display: swap;
-        }
-        @font-face {
+        }}
+        @font-face {{
             font-family: 'hackbold';
             src: url('/fonts/hack-bold-webfont.woff2') format('woff2'),
             url('/fonts/hack-bold-webfont.woff') format('woff'),
             url('/fonts/hack-bold-webfont.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
-        }
-        @font-face {
+        }}
+        @font-face {{
             font-family: 'hackbold_italic';
             src: url('/fonts/hack-bolditalic-webfont.woff2') format('woff2'),
             url('/fonts/hack-bolditalic-webfont.woff') format('woff'),
             url('/fonts/hack-bolditalic-webfont.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
-        }
-        @font-face {
+        }}
+        @font-face {{
             font-family: 'hackitalic';
             src: url('/fonts/hack-italic-webfont.woff2') format('woff2'),
             url('/fonts/hack-italic-webfont.woff') format('woff'),
             url('/fonts/hack-italic-webfont.ttf') format('truetype');
             font-weight: normal;
             font-style: normal;
-        }
-        body {
+        }}
+        body {{
             margin: 0;
             padding: 0;
-            background-color: #1e3c72;
-            color: #000;
+            background-color: {colors['background']};
+            color: {colors['text_color']};
             font-family: 'space_monoregular', Arial, sans-serif;
-        }
-        .container {
+        }}
+        .container {{
             display: flex;
             max-width: 100%;
             margin: 0 auto;
             padding: 15px;
             gap: 15px;
-        }
-        .site-title {
-            background-color: #000;
-            color: #ff8c00;
+        }}
+        .site-title {{
+            background-color: {colors['label_background']};
+            color: {colors['accent']};
             padding: 1px 10px;
             font-family: monospace;
             font-size: 12px;
             display: flex;
             align-items: center;
-        }
-        .site-title a {
-            color: #ff8c00;
+        }}
+        .site-title a {{
+            color: {colors['accent']};
             text-decoration: none;
-        }
-        .site-path {
+        }}
+        .site-path {{
             margin-left: 10px;
-            color: #666;
-        }
-        .left-column, .right-column {
+            color: {colors['text_color']};
+        }}
+        .left-column, .right-column {{
             display: flex;
             flex-direction: column;
             gap: 15px;
-        }
-        .left-column {
+        }}
+        .left-column {{
             flex: 1;
             display: flex;
             flex-direction: column;
             gap: 15px;
             width: 100%;
-        }
-        .right-column {
+        }}
+        .right-column {{
             flex: 0 0 325px;
             width: 325px;
-        }
-        .input-box {
-            background: white;
+        }}
+        .input-box {{
+            background: {colors['box_background']};
             margin-top: -15px;
             padding: 5px;
             border: 1px solid #000;
@@ -319,22 +443,22 @@ async def get_index():
             border-bottom-right-radius: 7px;
             border-bottom-left-radius: 7px;
             box-sizing: border-box;
-        }
-        .task-box {
-            background: white;
+        }}
+        .task-box {{
+            background: {colors['box_background']};
             margin-top: -15px;
             padding: 5px;
-            border: 1px solid #000;
+            border: 1px solid {colors['tasks_border']};
             border-top-left-radius: 0px;
             border-top-right-radius: 0px;
             border-bottom-right-radius: 7px;
             border-bottom-left-radius: 7px;
             box-sizing: border-box;
-        }
-        .links-box {
-            background: white;
+        }}
+        .links-box {{
+            background: {colors['box_background']};
             padding: 5px;
-            border: 1px solid #000;
+            border: 1px solid {colors['links_border']};
             border-top-left-radius: 0px;
             border-top-right-radius: 7px;
             border-bottom-right-radius: 7px;
@@ -344,19 +468,19 @@ async def get_index():
             box-sizing: border-box;
             font-size: 0.7rem;
             min-height: 75px;
-        }
-        .links-box a {
+        }}
+        .links-box a {{
             color: blue;
             text-decoration: none;
             display: block;
             padding: 2px 0;
-        }
-        .links-label {
+        }}
+        .links-label {{
             position: absolute;
             top: 0;
-            left: -3px;
-            background: #000;
-            color: #ff8c00;
+            left: -4px;
+            background: {colors['label_background']};
+            color: {colors['accent']};
             padding: 2px 2px 2px 2px;
             font-family: space_monoregular;
             font-size: 11px;
@@ -365,34 +489,47 @@ async def get_index():
             line-height: 1;
             text-transform: lowercase;
             width: 15px;
+            border: 1px solid {colors['links_label_border']};
             border-radius: 7px 0 0 7px;
-        }
-        .links-label span {
+        }}
+        .links-label span {{
             display: block;
             text-align: center;
             padding: 1px 1px 0.5px 1px;
-        }
-        .input-box textarea {
+        }}
+        .input-box input[type="text"] {{
+            width: 100%;
+            box-sizing: border-box;
+            font-family: inherit;
+            padding: 4px 8px;
+            border: 1px solid {colors['input_border']};
+            margin-bottom: 5px;
+            height: 18px;
+            background-color: {colors['input_background']};
+        }}
+        .input-box textarea {{
             width: 100%;
             box-sizing: border-box;
             resize: vertical;
             min-height: 100px;
             font-family: inherit;
             padding: 8px;
-            border: 1px solid #ccc;
-        }
-        .section-container {
+            color: {colors['text_color']};
+            border: 1px solid {colors['input_border']};
+            background-color: {colors['input_background']};
+        }}
+        .section-container {{
             position: relative;
             margin-bottom: 5px;
             margin-top: 5px;
             margin-left: 2px;
-        }
-        .section-label {
+        }}
+        .section-label {{
             position: absolute;
             top: 0;
-            left: -18px;
-            background: #000;
-            color: #ff8c00;
+            left: -20px;
+            background: {colors['label_background']};
+            color: {colors['accent']};
             padding: 2px 2px 2px 2px;
             font-family: space_monoregular;
             font-size: 11px;
@@ -401,143 +538,150 @@ async def get_index():
             line-height: 1;
             text-transform: lowercase;
             width: 15px;
+            border: 1px solid {colors['note_label_border']};
             border-radius: 7px 0 0 7px;
-        }
-        .section-label span {
+        }}
+        .section-label span {{
             display: block;
             text-align: center;
             padding: 1px 1px 0.5px 1px;
-        }
-        .notes-item {
-            background: white;
+        }}
+        #noteTitle {{
+            border: 1px solid {colors['input_border']};
+        }}
+        .notes-item {{
+            background: {colors['box_background']};
             padding-left: 5px;
             padding-top: 15px;
             padding-right: 5px;
             padding-bottom: 5px;
             margin-right: 15px;
-            border: 1px solid #000;
+            border: 1px solid {colors['note_border']};
             border-top-left-radius: 0px;
             border-top-right-radius: 7px;
             border-bottom-right-radius: 7px;
             border-bottom-left-radius: 7px;
-        }
-        .post-header {
+        }}
+        .post-header {{
             font-weight: normal;
             font-size: 10px;
             margin-top: -10px;
             margin-bottom: 10px;
-            color: #666;
-        }
-        .links-box a {
+            color: {colors['header_text']};
+        }}
+        .links-box a {{
             color: blue;
             text-decoration: none;
             display: block;
             padding: 2px 0;
-        }
-        .note-content {
+        }}
+        .note-content {{
             scroll-margin-top: 100px;
-        }
-        .markdown-body {
+        }}
+        .markdown-body {{
             font-size: 0.9rem;
-        }
-        .markdown-body ul {
+        }}
+        .markdown-body ul {{
             list-style-type: disc;
-        }
-        .markdown-body ul ul {
+        }}
+        .markdown-body ul ul {{
             list-style-type: circle;
-        }
-        .markdown-body ul ul ul {
+        }}
+        .markdown-body ul ul ul {{
             list-style-type: square;
-        }
-        .markdown-body ul,.markdown-body ol {
+        }}
+        .markdown-body ul,.markdown-body ol {{
             list-style-position: outside;
             padding-left: 1.5em;
             margin-top: 0.1rem;
             margin-bottom: 0.1rem;
-        }
-        .markdown-body li {
+        }}
+        .markdown-body li {{
             margin-bottom: 0.1rem;
-        }
-        .markdown-body input[type="checkbox"] {
+        }}
+        .markdown-body input[type="checkbox"] {{
             margin-right: 0.5rem;
-        }
-        .markdown-body h4 {
+        }}
+        .markdown-body h4 {{
             margin-top: 5px;
             margin-bottom: 5px;
-        }
-        .markdown-body h2 {
+        }}
+        .markdown-body h2 {{
             font-size: 1.5rem;
             font-weight: bold;
             margin: 1rem 0;
-            color: #2563eb;
-        }
-        .markdown-body p {
+            color: {colors['text_color']};
+        }}
+        .markdown-body p {{
             margin: 5px 0;
-        }
-        .notes-container {
+        }}
+        .notes-container {{
             width: 100%;
             margin-left: 15px;
             margin-right: 0;
             padding-left: 0;
             padding-right: 0;
-        }
-        #noteForm {
+        }}
+        #noteForm {{
             width: 100%;
-        }
-        #activeTasks {
+        }}
+        .notes-item .edit-label {{
+            color: {colors['accent']};
+        }}
+        #activeTasks {{
             word-wrap: break-word;
             overflow-wrap: break-word;
             max-height: 300px;
-        }
-        #activeTasks .task-item {
+        }}
+        #activeTasks .task-item {{
             display: flex;
             gap: 0.5rem;
             align-items: flex-start;
             padding: 0.1rem 0;
-        }
-        #activeTasks .task-text {
+        }}
+        #activeTasks .task-text {{
             flex: 1;
             min-width: 0;
             padding-top: 2px;
             word-break: break-word;
             white-space: pre-wrap;
             font-size: 0.7rem;
-        }
-        #noteForm button {
+        }}
+        #noteForm button {{
             width: 100px;
             padding: 0.25rem 0.5rem;
             font-size: 0.75rem;
-        }
-        pre {
-            background-color: #fdf6e3;
+        }}
+        pre {{
+            background-color: {colors['code_background']};
             margin: 0 0;
             padding: 0 0;
-        }
-        pre code {
-            background-color: #fdf6e3;
+        }}
+        pre code {{
+            background-color: {colors['code_background']};
             padding: 0.2em;
             border-radius: 0.3em;
             display: block;
             overflow-x: auto;
             font-size: 0.7rem;
-        }
-        .markdown-body pre code.hljs {
-            background-color: #fdf6e3;
+        }}
+        .markdown-body pre code.hljs {{
+            background-color: {colors['code_background']};
             padding: 0.3em !important;
             border-radius: 0.3em;
             display: block;
             overflow-x: auto;
             font-size: 0.75rem;
-        }
-        .notes-item pre code {
-            background-color: #fdf6e3;
+        }}
+        .notes-item pre code {{
+            background-color: {colors['code_background']};
             padding: 0.3em;
             border-radius: 0.3em;
             display: block;
             overflow-x: auto;
             font-size: 0.75rem;
-        }
-        .input-box input[type="text"] {
+        }}
+        .input-box input[type="text"] {{
             width: 100%;
             box-sizing: border-box;
             font-family: inherit;
@@ -545,16 +689,17 @@ async def get_index():
             border: 1px solid #ccc;
             margin-bottom: 5px;
             height: 18px;
-        }
-        .input-box textarea::placeholder {
+            color: {colors['text_color']};
+        }}
+        .input-box textarea::placeholder {{
             font-size: 10px;
             color: #999;
-        }
-        .input-box input::placeholder {
+        }}
+        .input-box input::placeholder {{
             font-size: 10px;
-            color: #999;
-        }
-        .loading-overlay {
+            color: {colors['text_color']};
+        }}
+        .loading-overlay {{
             display: none;
             position: fixed;
             top: 0;
@@ -565,113 +710,196 @@ async def get_index():
             z-index: 1000;
             justify-content: center;
             align-items: center;
-        }
-        .loading-spinner {
+        }}
+        .loading-spinner {{
             width: 50px;
             height: 50px;
             border: 5px solid #f3f3f3;
             border-top: 5px solid #3498db;
             border-radius: 50%;
             animation: spin 1s linear infinite;
-        }
-        .loading-text {
-            color: white;
+        }}
+        .loading-text {{
+            color: {colors['text_color']};
             margin-top: 10px;
             font-family: 'space_monoregular', monospace;
-        }
-        @keyframes spin {
-            0% {
-            transform: rotate(0deg);
-            }
-            100% {
-            transform: rotate(360deg);
-            }
-        }
-        .archived-link {
+        }}
+        @keyframes spin {{
+            0% {{
+                transform: rotate(0deg);
+            }}
+            100% {{
+                transform: rotate(360deg);
+            }}
+        }}
+        .archived-link {{
             margin-bottom: 3px;
             line-height: 1.2;
-        }
-        .archive-reference {
+        }}
+        .archived-link a {{
+            color: {colors['accent']};
+            text-decoration: none;
+        }}
+        .archive-reference {{
             display: block;
             margin-left: 20px;
             margin-top: 0px;
             font-size: 75%;
-        }
-        .archive-reference + .archive-reference {
+        }}
+        .archive-reference + .archive-reference {{
             margin-top: 1px;
-        }
-        .archive-reference a {
-            color: #d4b062;
+        }}
+        .archive-reference a {{
+            color: {colors['accent']};
             text-decoration: none;
             line-height: 1.1;
-        }
-        .archive-reference a:hover {
-            color: #e6c989;
+        }}
+        .archive-reference a:hover {{
+            color: {colors['text_color']};
             text-decoration: underline;
-        }
-        .markdown-body img {
+        }}
+        .markdown-body img {{
             max-width: 100%;
             max-height: 400px;
             width: auto;
             height: auto;
             display: block;
             margin: 10px auto;
-        }
-        .edit-overlay {
+        }}
+        .edit-overlay {{
             display: none;
             position: fixed;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.7);
+            background: {colors['edit_overlay_background']};
             z-index: 1000;
-        }
-        .edit-container {
+        }}
+        .edit-container {{
             position: relative;
             width: 80%;
             max-width: 800px;
             margin: 50px auto;
-            background: white;
+            background: {colors['edit_background']};
             padding: 5px;
-            border: 1px solid #000;
+            border: 1px solid {colors['edit_border']};
             border-top-left-radius: 0px;
             border-top-right-radius: 7px;
             border-bottom-right-radius: 7px;
             border-bottom-left-radius: 7px;
             font-family: 'space_monoregular', Arial, sans-serif;
-        }
-        .edit-textarea {
+        }}
+        .edit-textarea {{
             width: 100%;
             min-height: 300px;
             margin: 10px 0;
             padding: 8px;
             box-sizing: border-box;
-            border: 1px solid #ccc;
+            border: 1px solid {colors['edit_input_border']};
+            background-color: {colors['edit_input_background']};
+            color: {colors['text_color']};
             font-family: inherit;
             font-size: 0.9rem;
             resize: vertical;
-        }
-        .edit-buttons {
+        }}
+        .edit-buttons {{
             text-align: right;
             padding: 5px;
-        }
-        .edit-button {
+        }}
+        .edit-button {{
             background: #000;
-            color: #ff8c00;
+            color: {colors['accent']};
             border: none;
             padding: 5px 15px;
             margin-left: 10px;
             cursor: pointer;
             font-family: inherit;
-        }
+        }}
+        .theme-selector {{
+            position: fixed;
+            bottom: 15px;
+            right: 0;
+            display: flex;
+            align-items: flex-start;
+            z-index: 1000;
+            transform: translateX(calc(100% - 19px)); /* Hide content, show label */
+            transition: transform 0.3s ease;
+        }}
 
+        .theme-selector:hover {{
+            transform: translateX(0); /* Show everything on hover */
+        }}
 
+        .theme-label {{
+            background: {colors['label_background']};
+            color: {colors['accent']};
+            padding: 2px 2px 2px 2px;
+            font-family: space_monoregular;
+            font-size: 11px;
+            display: inline-flex;
+            flex-direction: column;
+            line-height: 1;
+            text-transform: lowercase;
+            width: 15px;
+            border-radius: 7px 0 0 7px;
+            border: 1px solid {colors['theme_label_border']};
+            cursor: pointer;
+        }}
+
+        .theme-label span {{
+            display: block;
+            text-align: center;
+            padding: 1px 1px 0.5px 1px;
+        }}
+
+        .theme-content {{
+            background: {colors['box_background']};
+            padding: 10px;
+            border: 1px solid {colors['theme_border']};
+            border-left: none;
+            border-bottom-left-radius: 7px;
+            width: 150px; /* Fixed width for content */
+            height: 75px; /* Fixed height for now */
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }}
+        #themeSelector {{
+            width: 100%;
+            margin-top: 5px;
+            padding: 5px;
+            border: 1px solid {colors['input_border']};
+            border-radius: 4px;
+            background: {colors['input_background']};
+            color: {colors['text_color']};
+            font-family: inherit;
+            font-size: 0.8rem;
+        }}
+        #themeSelector option {{    
+            background: {colors['input_background']};
+            color: {colors['text_color']};
+            padding: 5px;
+        }}
+        .theme-save-btn {{
+            background: {colors['button_bg']};
+            color: {colors['button_text']};
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 0.8rem;
+            width: 100%;
+        }}
+
+        .theme-save-btn:hover {{
+            opacity: 0.9;
+        }}
     </style>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/default.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-</head>
+"""
+
+    html_content = """
 <body>
     <div class="container">
         <!-- Left Column -->
@@ -1055,6 +1283,29 @@ Start Links with + to archive websites...
                                 }
                             });
                         });
+
+                        async function saveTheme() {
+                            const selectedTheme = document.getElementById('themeSelector').value;
+                            try {
+                                const formData = new FormData();
+                                formData.append('theme', selectedTheme);
+                                
+                                const response = await fetch('/api/save-theme', {
+                                    method: 'POST',
+                                    body: formData
+                                });
+                                
+                                if (!response.ok) {
+                                    throw new Error('Failed to save theme');
+                                }
+                                
+                                // Reload the page to apply the new theme
+                                window.location.reload();
+                            } catch (error) {
+                                console.error('Error saving theme:', error);
+                                alert('Failed to save theme');
+                            }
+                        }
                     </script>
                 </div>
             </div>
@@ -1083,9 +1334,70 @@ Start Links with + to archive websites...
             </div>
         </div>
     </div>
+    <!-- Add before </body> -->
+    <div class="theme-selector">
+        <div class="theme-label">
+            <span>t</span>
+            <span>h</span>
+            <span>e</span>
+            <span>m</span>
+            <span>e</span>
+        </div>
+        <div class="theme-content">
+            <select id="themeSelector">
+                <!-- Will be populated dynamically -->
+            </select>
+            <button class="theme-save-btn" onclick="saveTheme()">Save Theme</button>
+        </div>
+    </div>
 </body>
 </html>
     """
+
+    return f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Notes</title>
+        {themed_styles}
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/{colors['code_style']}.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        // Add this at the start of your JavaScript
+        const CURRENT_THEME = "{CURRENT_THEME}";  // Add this line to make current theme available to JS
+        
+        async function initializeTheme() {{
+            try {{
+                const response = await fetch('/api/themes');
+                const themes = await response.json();
+                
+                const selector = document.getElementById('themeSelector');
+                themes.forEach(theme => {{
+                    const option = document.createElement('option');
+                    option.value = theme;
+                    option.textContent = theme.charAt(0).toUpperCase() + theme.slice(1);
+                    if (theme === CURRENT_THEME) {{  // Use the CURRENT_THEME variable
+                        option.selected = true;
+                    }}
+                    selector.appendChild(option);
+                }});
+            }} catch (error) {{
+                console.error('Error loading themes:', error);
+            }}
+        }}
+
+        // Initialize when the page loads
+        document.addEventListener('DOMContentLoaded', function() {{
+            initializeTheme();
+        }});
+        
+        // ... rest of your JavaScript ...
+    </script>
+</head>
+    """ + html_content
 
 @app.get("/api/notes")
 async def get_notes():
@@ -1118,7 +1430,7 @@ async def get_notes():
             </div>
             <div class="notes-item markdown-body">
                 <div class="post-header" onclick="editNote({note_index})" style="cursor: pointer;">
-                    Posted: {timestamp} <span style="color: #ff8c00;">(click to edit)</span>
+                    Posted: {timestamp} <span class="edit-label">(click to edit)</span>
                 </div>
                 {rendered_content}
             </div>
@@ -1466,19 +1778,87 @@ async def get_links():
     for domain, data in link_groups.items():
         archives_html = '\n'.join(
             f'<span class="archive-reference">'
-            f'<a href="/assets/sites/{archive["filename"]}">site archive [{archive["timestamp"]}]</a>'
+            f'<a href="/assets/sites/{archive["filename"]}" target="_blank" rel="noopener noreferrer">site archive [{archive["timestamp"]}]</a>'
             f'</span>'
             for archive in data['archives']
         )
         
         html_parts.append(
             f'<div class="archived-link">'
-            f'<a href="https://{domain}">{data["title"]}</a>'
+            f'<a href="https://{domain}" target="_blank" rel="noopener noreferrer">{data["title"]}</a>'
             f'{archives_html}'
             f'</div>'
         )
 
     return HTMLResponse(''.join(html_parts))
+
+@app.get("/api/themes")
+async def get_themes():
+    """Return list of available themes"""
+    return list(THEMES.keys())
+
+def get_config_file():
+    """Get the path to the config file, creating directories if needed."""
+    # Get the config directory for the current platform
+    config_dir = Path(platformdirs.user_config_dir("noteflow"))
+    
+    # Create config directory if it doesn't exist
+    config_dir.mkdir(parents=True, exist_ok=True)
+    
+    return config_dir / "noteflow.json"
+
+def load_config():
+    """Load configuration from JSON file or create default if not exists."""
+    config_file = get_config_file()
+    
+    # Default configuration
+    default_config = {
+        "theme": "default-light"
+    }
+    
+    try:
+        if config_file.exists():
+            with open(config_file, 'r') as f:
+                return json.load(f)
+        else:
+            # Create new config file with defaults
+            with open(config_file, 'w') as f:
+                json.dump(default_config, f, indent=4)
+            return default_config
+    except Exception as e:
+        print(f"Error loading config: {e}")
+        return default_config
+
+def save_config(config):
+    """Save configuration to JSON file."""
+    config_file = get_config_file()
+    try:
+        with open(config_file, 'w') as f:
+            json.dump(config, f, indent=4)
+        return True
+    except Exception as e:
+        print(f"Error saving config: {e}")
+        return False
+
+# Update the CURRENT_THEME initialization
+config = load_config()
+CURRENT_THEME = config.get('theme', 'default-light')
+
+# Add new endpoint to save theme
+@app.post("/api/save-theme")
+async def save_theme(theme: str = Form(...)):
+    if theme not in THEMES:
+        raise HTTPException(status_code=400, detail="Invalid theme")
+    
+    config = load_config()
+    config['theme'] = theme
+    
+    if save_config(config):
+        global CURRENT_THEME
+        CURRENT_THEME = theme
+        return {"status": "success"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to save theme")
 
 def main():
     print("Running noteflow...")
