@@ -26,6 +26,7 @@ import platformdirs  # You'll need to pip install platformdirs
 import signal
 from asyncio import get_event_loop
 from fastapi.responses import JSONResponse
+import psutil  # You might need to: pip install psutil
 
 def saveFullHtmlPage(url, pagepath='page', session=requests.Session(), html=None):
     """Save web page html and supported contents"""
@@ -1324,17 +1325,29 @@ Start Links with + to archive websites...
                         async function shutdownServer() {
                             if (confirm('Are you sure you want to shutdown this server instance?')) {
                                 try {
-                                    const response = await fetch('/api/shutdown', { method: 'POST' });
+                                    const response = await fetch('/api/shutdown', { 
+                                        method: 'POST',
+                                        // Add timeout to prevent hanging
+                                        signal: AbortSignal.timeout(5000)
+                                    });
+                                    
                                     if (response.ok) {
                                         alert('Server is shutting down...');
                                         // Wait a moment then close the window
-                                        setTimeout(() => window.close(), 1000);
+                                        setTimeout(() => {
+                                            try {
+                                                window.close();
+                                            } catch (e) {
+                                                // If window.close() fails, suggest manual closure
+                                                alert('Please close this window manually');
+                                            }
+                                        }, 1000);
                                     } else {
-                                        alert('Failed to shutdown server');
+                                        alert('Failed to shutdown server. Please close this window and terminate the process manually.');
                                     }
                                 } catch (error) {
                                     console.error('Error shutting down server:', error);
-                                    alert('Error shutting down server');
+                                    alert('Error shutting down server. Please close this window and terminate the process manually.');
                                 }
                             }
                         }
@@ -1927,13 +1940,38 @@ async def save_theme(theme: str = Form(...)):
     
 @app.post("/api/shutdown")
 async def shutdown():
-    """Shutdown this specific instance of the application"""
-    # Get the current process ID
+    """Shutdown this specific instance of the application using multiple approaches"""
     pid = os.getpid()
     
-    # Schedule the shutdown to happen after we send the response
     def shutdown_server():
-        os.kill(pid, signal.SIGTERM)
+        try:
+            # Get the current process
+            process = psutil.Process(pid)
+            
+            # First try to terminate all child processes
+            children = process.children(recursive=True)
+            for child in children:
+                try:
+                    child.terminate()
+                except:
+                    pass
+            
+            # Try multiple shutdown approaches
+            try:
+                if platform.system() == 'Windows':
+                    os.kill(pid, signal.CTRL_C_EVENT)
+                else:
+                    # Try different signals on Unix systems
+                    os.kill(pid, signal.SIGTERM)
+                    os.kill(pid, signal.SIGINT)
+            except:
+                # If signals fail, force kill the process
+                process.kill()
+            
+        except Exception as e:
+            print(f"Shutdown error: {e}")
+            # Last resort: force exit
+            sys.exit(0)
     
     # Schedule the shutdown
     from asyncio import get_event_loop
