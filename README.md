@@ -1,14 +1,18 @@
 # NoteFlow
 
-NoteFlow is a lightweight, Markdown-based note-taking application with task management capabilities. It provides a clean interface for creating, viewing, and managing notes with support for tasks, images, and code snippets.
+NoteFlow is a lightweight, Markdown-based note-taking application with task management capabilities. It provides a clean interface for creating, viewing, and managing notes with support for tasks, images, files,and code snippets.
 
 ## Features
-
-![Main View](/screenshot_1.png)
-
-![Local Site Copy](/screenshot_2.png)
-
-![Site Link Example](/screenshot_3.png)
+#### Initial View:
+![Initial View](/screenshot_1.png)
+#### Markdown Editor:
+![Markdown Editor](/screenshot_2.png)
+#### Upload Images and Files:
+![Upload Images and Files](/screenshot_3.png)
+#### Point in Time Site Copy/Bookmark:
+![Point in Time Site Copy/Bookmark](/screenshot_4.png)
+#### Multiple Themes:
+![Multiple Themes](/screenshot_5.png)
 
 ## Features
 
@@ -18,8 +22,11 @@ NoteFlow is a lightweight, Markdown-based note-taking application with task mana
 - **💾 Zero Database**: Your entire note history lives in one portable Markdown file
 - **🚀 Instant Start**: Zero configuration required - just launch and start writing
 - **🔒 Privacy First**: Runs entirely local - your notes never leave your machine
-- **✨ Modern Interface**: Clean, responsive design built with FastAPI
+- **✨ Modern / Retro Interface**: Clean, responsive design built with FastAPI
 - **📚 Site Links and Archival**: Save site links, and generate a static HTML archive version of linked sites
+- **🎨 Multiple Themes**: Choose from a variety of themes
+- **🔗 Save Files/Images**: Archive files and images locally
+- **🖥️ Multiple Instances**: Open multiple instances of Noteflow to take notes in different directories
 
 ## Quick Start
 
@@ -50,7 +57,7 @@ That's it! You're now ready to start using Noteflow for your note-taking needs.
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.9+
 - FastAPI
 - uvicorn
 - markdown-it-py
@@ -72,10 +79,10 @@ That's it! You're now ready to start using Noteflow for your note-taking needs.
 - Tasks automatically appear in the Active Tasks panel
 - Click checkboxes to mark tasks as complete
 
-### Attaching Images
+### Attaching Images and Files
 
-- Drag and drop images into the Noteflow input box to attach them to your note
-- Images are automatically embedded in the note and saved locally within the assets/images folder
+- Drag and drop images or files into the Noteflow input box to attach them to your note
+- Images and files are automatically embedded in the note and saved locally within the assets/images and assets/files folders
 
 ### Saving Site Links and Archiving
 

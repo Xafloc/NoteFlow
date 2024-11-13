@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "noteflow"
+version = "0.1.6"
+authors = [
+    { name="Xafloc", email="xafloc@tetrago.com" },
+]
+description = "A lightweight, Markdown-based note-taking application with task management capabilities, providing a clean interface for creating, viewing, and managing notes with support for tasks, images, and code snippets."
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3.9",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Topic :: Office/Business :: News/Diary",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Topic :: Utilities"
+]
+dependencies = [
+    "fastapi>=0.104.1",
+    "uvicorn>=0.24.0",
+    "markdown-it-py>=3.0.0",
+    "python-multipart>=0.0.6",
+    "pydantic>=2.4.2",
+    "pathlib>=1.0.1",
+    "typing>=3.7.4.3",
+    "aiofiles>=23.2.1",
+    "jinja2>=3.1.2",
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "platformdirs>=3.0.0"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/Xafloc/NoteFlow"
+"Bug Tracker" = "https://github.com/Xafloc/NoteFlow/issues"
+
+[project.scripts]
+noteflow = "noteflow.noteflow:main"

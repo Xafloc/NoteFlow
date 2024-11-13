@@ -98,6 +98,7 @@ def create_directories():
     directories = [
         base_path / "assets",
         base_path / "assets/images",
+        base_path / "assets/files",
         base_path / "assets/sites"
     ]
     
@@ -120,7 +121,7 @@ NOTE_SEPARATOR = "\n---\n"
 
 # Define available themes
 THEMES = {
-        'default-light': {
+        'light-blue': {
          # Main colors
         'background': '#1e3c72',          # Main background color
         'accent': '#ff8c00',              # Accent color
@@ -159,7 +160,7 @@ THEMES = {
         'button_bg': '#313437',
         'button_text': '#ff8c00',
     },
-    'default-dark': {
+    'dark-blue': {
          # Main colors
         'background': '#1e3c72',          # Main background color
         'accent': '#ff8c00',              # Accent color
@@ -238,9 +239,6 @@ THEMES = {
         'button_text': '#ff8c00',
     }
 }
-
-# Manual theme selector (change this value to test different themes)
-CURRENT_THEME = 'default-dark'  # Change to 'dark' to test dark theme
 
 # Serve the fonts
 @app.get("/fonts/{path:path}")
@@ -1172,7 +1170,7 @@ Start Links with + to archive websites...
                                 formData.append('file', file);
 
                                 try {
-                                    const response = await fetch('/api/upload-image', {
+                                    const response = await fetch('/api/upload-file', {
                                         method: 'POST',
                                         body: formData
                                     });
@@ -1182,7 +1180,7 @@ Start Links with + to archive websites...
                                         const markdownLink = `![${file.name}](<${filePath}>)`;
                                         insertAtCursor(noteInput, markdownLink);
                                     } else {
-                                        alert('Failed to upload image');
+                                        alert('Failed to upload file');
                                     }
                                 } catch (error) {
                                     console.error('Error uploading image:', error);
@@ -1588,17 +1586,36 @@ async def update_checkbox(request: UpdateNoteRequest):
     
     return {"status": "success"}
 
-@app.post("/api/upload-image")
-async def upload_image(file: UploadFile = File(...)):
-    assets_path = Path("assets/images")
-    assets_path.mkdir(parents=True, exist_ok=True)  # Create directories if they don't exist
-
+@app.post("/api/upload-file")
+async def upload_file(file: UploadFile = File(...)):
+    # Get file extension and MIME type
+    extension = os.path.splitext(file.filename)[1].lower()
+    content_type = file.content_type or mimetypes.guess_type(file.filename)[0]
+    
+    # Determine if it's an image
+    is_image = content_type and content_type.startswith('image/')
+    
+    # Choose appropriate directory based on file type
+    if is_image:
+        assets_path = Path("assets/images")
+        relative_path = "images"
+    else:
+        assets_path = Path("assets/files")
+        relative_path = "files"
+    
+    # Create directory if it doesn't exist
+    assets_path.mkdir(parents=True, exist_ok=True)
+    
+    # Save the file
     file_path = assets_path / file.filename
-
     with file_path.open("wb") as buffer:
         buffer.write(await file.read())
-
-    return {"filePath": f"/assets/images/{file.filename}"}
+    
+    return {
+        "filePath": f"/assets/{relative_path}/{file.filename}",
+        "isImage": is_image,
+        "contentType": content_type
+    }
 
 def render_markdown(content, env):
     md = MarkdownIt()
@@ -1614,22 +1631,25 @@ def render_markdown(content, env):
         # Remove angle brackets if present (from drag-and-drop)
         src = src.strip('<>')
         
-        # Handle both local and remote images
-        if src.startswith(('http://', 'https://')):
-            # Remote image - use as is
-            img_url = src
+        # Only render as image if it's in the images directory or is a remote image
+        if src.startswith(('http://', 'https://')) or '/assets/images/' in src:
+            # Handle both local and remote images
+            img_url = src if src.startswith(('http://', 'https://', '/')) else f'/{src}'
+            title_attr = f' title="{title}"' if title else ''
+            
+            # Wrap image in a link that opens in new window
+            return (
+                f'<a href="{img_url}" target="_blank" rel="noopener noreferrer">'
+                f'<img src="{img_url}" alt="{alt}"{title_attr}>'
+                f'</a>'
+            )
         else:
-            # Local image - ensure proper path
-            img_url = src if src.startswith('/') else f'/{src}'
-        
-        title_attr = f' title="{title}"' if title else ''
-        
-        # Wrap image in a link that opens in new window
-        return (
-            f'<a href="{img_url}" target="_blank" rel="noopener noreferrer">'
-            f'<img src="{img_url}" alt="{alt}"{title_attr}>'
-            f'</a>'
-        )
+            # For non-image files, render as a regular link
+            filename = os.path.basename(src)
+            return (
+                f'<a href="{src}" target="_blank" rel="noopener noreferrer" '
+                f'class="file-link">📎 {filename}</a>'
+            )
     
     md.renderer.rules['image'] = render_image
     return md.render(content, env)
@@ -1813,13 +1833,21 @@ def load_config():
     
     # Default configuration
     default_config = {
-        "theme": "default-light"
+        "theme": "dark-orange"
     }
     
     try:
         if config_file.exists():
             with open(config_file, 'r') as f:
-                return json.load(f)
+                config = json.load(f)
+                # If theme doesn't exist, update config file with default theme
+                if config.get('theme') not in THEMES:
+                    print(f"Warning: Theme '{config.get('theme')}' not found, defaulting to dark-orange")
+                    config['theme'] = default_config['theme']
+                    # Save the updated config with the default theme
+                    with open(config_file, 'w') as f:
+                        json.dump(config, f, indent=4)
+                return config
         else:
             # Create new config file with defaults
             with open(config_file, 'w') as f:
@@ -1842,8 +1870,10 @@ def save_config(config):
 
 # Update the CURRENT_THEME initialization
 config = load_config()
-CURRENT_THEME = config.get('theme', 'default-light')
-
+CURRENT_THEME = config.get('theme', 'light-blue')
+if CURRENT_THEME not in THEMES:  # Double-check the theme exists
+    CURRENT_THEME = 'dark-orange'
+    
 # Add new endpoint to save theme
 @app.post("/api/save-theme")
 async def save_theme(theme: str = Form(...)):
@@ -1859,7 +1889,7 @@ async def save_theme(theme: str = Form(...)):
         return {"status": "success"}
     else:
         raise HTTPException(status_code=500, detail="Failed to save theme")
-
+    
 def main():
     print("Running noteflow...")
     # Get current directory name
@@ -1874,8 +1904,19 @@ def main():
     # Open browser
     webbrowser.open(f"http://localhost:{port}")
     
-    # Start server
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    # Configure logging to suppress access logs
+    log_config = uvicorn.config.LOGGING_CONFIG
+    log_config["loggers"]["uvicorn.access"]["level"] = "WARNING"
+    
+    # Start server with modified logging
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=port, 
+        log_level="debug",
+        log_config=log_config,
+        access_log=False
+    )
 
 if __name__ == "__main__":
     main()
