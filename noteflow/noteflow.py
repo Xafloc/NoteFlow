@@ -645,7 +645,7 @@ async def get_index():
         #activeTasks {{
             word-wrap: break-word;
             overflow-wrap: break-word;
-            max-height: 300px;
+            max-height: none;
         }}
         #activeTasks .task-item {{
             display: flex;
