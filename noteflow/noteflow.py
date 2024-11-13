@@ -23,6 +23,9 @@ from bs4 import BeautifulSoup
 import json
 from pathlib import Path
 import platformdirs  # You'll need to pip install platformdirs
+import signal
+from asyncio import get_event_loop
+from fastapi.responses import JSONResponse
 
 def saveFullHtmlPage(url, pagepath='page', session=requests.Session(), html=None):
     """Save web page html and supported contents"""
@@ -121,8 +124,8 @@ NOTE_SEPARATOR = "\n---\n"
 
 # Define available themes
 THEMES = {
-        'light-blue': {
-         # Main colors
+    'light-blue': {
+        # Main colors
         'background': '#1e3c72',          # Main background color
         'accent': '#ff8c00',              # Accent color
         'text_color': '#757575',          # Global text color
@@ -131,14 +134,12 @@ THEMES = {
         'label_background': '#000000',    # Label backgrounds
         'note_label_border': '#000000',   # Label borders
         'links_label_border': '#000000',
-        'theme_label_border': '#000000',
         'header_text': '#666666',         # Label text color
 
         # Content boxes
         'box_background': '#ffffff',      # Box backgrounds
         'note_border': '#000000',         # Box borders
         'tasks_border': '#000000',
-        'theme_border': '#000000',
         'links_border': '#000000',
 
         # Input fields
@@ -159,9 +160,15 @@ THEMES = {
         # Button Colors
         'button_bg': '#313437',
         'button_text': '#ff8c00',
+
+        # Admin Panel Colors
+        'admin_button_bg': '#313437',
+        'admin_button_text': '#ff8c00',
+        'admin_label_border': '#000000',
+        'admin_border': '#000000',
     },
     'dark-blue': {
-         # Main colors
+        # Main colors
         'background': '#1e3c72',          # Main background color
         'accent': '#ff8c00',              # Accent color
         'text_color': '#757575',          # Global text color
@@ -170,14 +177,12 @@ THEMES = {
         'label_background': '#000000',    # Label backgrounds
         'note_label_border': '#000000',   # Label borders
         'links_label_border': '#000000',
-        'theme_label_border': '#000000',
         'header_text': '#666666',         # Label text color
 
         # Content boxes
         'box_background': '#26292c',      # Box backgrounds
         'note_border': '#000000',         # Box borders
         'tasks_border': '#000000',
-        'theme_border': '#000000',
         'links_border': '#000000',
 
         # Input fields
@@ -198,6 +203,12 @@ THEMES = {
         # Button Colors
         'button_bg': '#313437',
         'button_text': '#ff8c00',
+
+        # Admin Panel Colors
+        'admin_button_bg': '#313437',
+        'admin_button_text': '#ff8c00',
+        'admin_label_border': '#000000',
+        'admin_border': '#000000',
     },
     'dark-orange': {
         # Main colors
@@ -209,14 +220,12 @@ THEMES = {
         'label_background': '#313437',    # Label backgrounds
         'note_label_border': '#000000',   # Label borders
         'links_label_border': '#000000',
-        'theme_label_border': '#000000',
         'header_text': '#5084a7',         # Label text color
 
         # Content boxes
         'box_background': '#26292c',      # Box backgrounds
         'note_border': '#000000',         # Box borders
         'tasks_border': '#000000',
-        'theme_border': '#000000',
         'links_border': '#000000',
 
         # Input fields
@@ -237,6 +246,12 @@ THEMES = {
         # Button Colors
         'button_bg': '#313437',
         'button_text': '#ff8c00',
+
+        # Admin Panel Colors
+        'admin_button_bg': '#313437',
+        'admin_button_text': '#ff8c00',
+        'admin_label_border': '#000000',
+        'admin_border': '#000000',
     }
 }
 
@@ -814,7 +829,7 @@ async def get_index():
             cursor: pointer;
             font-family: inherit;
         }}
-        .theme-selector {{
+        .admin-panel {{
             position: fixed;
             bottom: 15px;
             right: 0;
@@ -825,11 +840,11 @@ async def get_index():
             transition: transform 0.3s ease;
         }}
 
-        .theme-selector:hover {{
+        .admin-panel:hover {{
             transform: translateX(0); /* Show everything on hover */
         }}
 
-        .theme-label {{
+        .admin-label {{
             background: {colors['label_background']};
             color: {colors['accent']};
             padding: 2px 2px 2px 2px;
@@ -841,28 +856,44 @@ async def get_index():
             text-transform: lowercase;
             width: 15px;
             border-radius: 7px 0 0 7px;
-            border: 1px solid {colors['theme_label_border']};
+            border: 1px solid {colors['admin_label_border']};
             cursor: pointer;
         }}
 
-        .theme-label span {{
+        .admin-label span {{
             display: block;
             text-align: center;
             padding: 1px 1px 0.5px 1px;
         }}
 
-        .theme-content {{
+        .admin-content {{
             background: {colors['box_background']};
             padding: 10px;
-            border: 1px solid {colors['theme_border']};
+            border: 1px solid {colors['admin_border']};
             border-left: none;
             border-bottom-left-radius: 7px;
-            width: 150px; /* Fixed width for content */
-            height: 75px; /* Fixed height for now */
+            width: 150px;
             display: flex;
             flex-direction: column;
             gap: 10px;
         }}
+
+        .admin-button {{
+            background: {colors['admin_button_bg']};
+            color: {colors['admin_button_text']};
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 0.8rem;
+            width: 100%;
+        }}
+
+        .admin-button:hover {{
+            opacity: 0.9;
+        }}
+
         #themeSelector {{
             width: 100%;
             margin-top: 5px;
@@ -874,25 +905,11 @@ async def get_index():
             font-family: inherit;
             font-size: 0.8rem;
         }}
+
         #themeSelector option {{    
             background: {colors['input_background']};
             color: {colors['text_color']};
             padding: 5px;
-        }}
-        .theme-save-btn {{
-            background: {colors['button_bg']};
-            color: {colors['button_text']};
-            border: none;
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-family: inherit;
-            font-size: 0.8rem;
-            width: 100%;
-        }}
-
-        .theme-save-btn:hover {{
-            opacity: 0.9;
         }}
     </style>
 """
@@ -1304,6 +1321,23 @@ Start Links with + to archive websites...
                                 alert('Failed to save theme');
                             }
                         }
+                        async function shutdownServer() {
+                            if (confirm('Are you sure you want to shutdown this server instance?')) {
+                                try {
+                                    const response = await fetch('/api/shutdown', { method: 'POST' });
+                                    if (response.ok) {
+                                        alert('Server is shutting down...');
+                                        // Wait a moment then close the window
+                                        setTimeout(() => window.close(), 1000);
+                                    } else {
+                                        alert('Failed to shutdown server');
+                                    }
+                                } catch (error) {
+                                    console.error('Error shutting down server:', error);
+                                    alert('Error shutting down server');
+                                }
+                            }
+                        }
                     </script>
                 </div>
             </div>
@@ -1333,19 +1367,20 @@ Start Links with + to archive websites...
         </div>
     </div>
     <!-- Add before </body> -->
-    <div class="theme-selector">
-        <div class="theme-label">
-            <span>t</span>
-            <span>h</span>
-            <span>e</span>
+    <div class="admin-panel">
+        <div class="admin-label">
+            <span>a</span>
+            <span>d</span>
             <span>m</span>
-            <span>e</span>
+            <span>i</span>
+            <span>n</span>
         </div>
-        <div class="theme-content">
+        <div class="admin-content">
             <select id="themeSelector">
                 <!-- Will be populated dynamically -->
             </select>
-            <button class="theme-save-btn" onclick="saveTheme()">Save Theme</button>
+            <button class="admin-button" onclick="saveTheme()">Save Theme</button>
+            <button class="admin-button" onclick="shutdownServer()">Shutdown</button>
         </div>
     </div>
 </body>
@@ -1890,6 +1925,23 @@ async def save_theme(theme: str = Form(...)):
     else:
         raise HTTPException(status_code=500, detail="Failed to save theme")
     
+@app.post("/api/shutdown")
+async def shutdown():
+    """Shutdown this specific instance of the application"""
+    # Get the current process ID
+    pid = os.getpid()
+    
+    # Schedule the shutdown to happen after we send the response
+    def shutdown_server():
+        os.kill(pid, signal.SIGTERM)
+    
+    # Schedule the shutdown
+    from asyncio import get_event_loop
+    loop = get_event_loop()
+    loop.call_later(0.5, shutdown_server)
+    
+    return JSONResponse({"status": "shutting down"})
+
 def main():
     print("Running noteflow...")
     # Get current directory name
