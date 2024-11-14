@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from datetime import datetime
 import uvicorn
 import socket
+import platform
+import subprocess
 import webbrowser
 import io
 import re
@@ -56,7 +58,7 @@ def saveFullHtmlPage(url, pagepath='page', session=requests.Session(), html=None
                         continue
                         
                     # Clean the base filename
-                    base_filename = re.sub('\W+', '_', base_filename)
+                    base_filename = re.sub(r'\W+', '_', base_filename)
                     base_filename = base_filename.strip('_')
                     
                     # Combine clean base filename with original extension
@@ -161,6 +163,8 @@ THEMES = {
         # Button Colors
         'button_bg': '#313437',
         'button_text': '#ff8c00',
+        'button_border': '#313437',
+        'button_hover': '#3a3f47',
 
         # Admin Panel Colors
         'admin_button_bg': '#313437',
@@ -204,6 +208,8 @@ THEMES = {
         # Button Colors
         'button_bg': '#313437',
         'button_text': '#ff8c00',
+        'button_border': '#313437',
+        'button_hover': '#3a3f47',
 
         # Admin Panel Colors
         'admin_button_bg': '#313437',
@@ -247,6 +253,8 @@ THEMES = {
         # Button Colors
         'button_bg': '#313437',
         'button_text': '#ff8c00',
+        'button_border': '#313437',
+        'button_hover': '#3a3f47',
 
         # Admin Panel Colors
         'admin_button_bg': '#313437',
@@ -563,6 +571,39 @@ async def get_index():
         #noteTitle {{
             border: 1px solid {colors['input_border']};
         }}
+        .title-input-container {{
+            display: flex;
+            align-items: flex-start;
+            gap: 10px; /* Space between input and button */
+        }}
+        .title-input-container input[type="text"] {{
+            flex: 1; /* Take up remaining space */
+            box-sizing: border-box;
+            font-family: inherit;
+            padding: 4px 8px;
+            border: 1px solid {colors['input_border']};
+            margin-bottom: 5px;
+            height: 25px;
+            color: {colors['text_color']};
+        }}
+        .save-note-button {{   
+            width: 75px;
+            background: {colors['button_bg']};
+            hover: {colors['button_hover']};
+            color: {colors['accent']};
+            border: none;
+            padding: 4px 0;
+            cursor: pointer;
+            font-family: inherit;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            border-bottom-right-radius: 4px;
+            border-bottom-left-radius: 4px;
+        }}
         .notes-item {{
             background: {colors['box_background']};
             padding-left: 5px;
@@ -575,6 +616,8 @@ async def get_index():
             border-top-right-radius: 7px;
             border-bottom-right-radius: 7px;
             border-bottom-left-radius: 7px;
+            min-height: 60px;
+            box-sizing: border-box;
         }}
         .post-header {{
             font-weight: normal;
@@ -923,7 +966,10 @@ async def get_index():
             <form id="noteForm">
                 <!-- Input Section -->
                 <div class="input-box">
-                    <input type="text" id="noteTitle" name="noteTitle" placeholder="Enter note title here...">
+                    <div class="title-input-container">
+                        <input type="text" id="noteTitle" name="noteTitle" placeholder="Enter note title here...">
+                        <button id="saveNoteButton" class="save-note-button" onclick="handleSubmit(event)">Save Note</button>
+                    </div>
                     <textarea id="noteInput" name="noteInput" placeholder="Enter note in Markdown format.."></textarea>
                 </div>
 
@@ -960,7 +1006,7 @@ async def get_index():
                                 e.preventDefault();
                                 const title = $('#noteTitle').val().trim();
                                 const content = $('#noteInput').val().trim();
-                                
+
                                 if (!content) return;
 
                                 // Check if content contains a +http link
@@ -979,7 +1025,7 @@ async def get_index():
                                     if (!response.ok) {
                                         throw new Error('Failed to add note');
                                     }
-                                    
+
                                     // Clear inputs
                                     $('#noteTitle').val('');
                                     $('#noteInput').val('');
@@ -988,7 +1034,7 @@ async def get_index():
                                     // Refresh both notes and links
                                     await loadNotes();
                                     loadLinks();
-                                    
+
                                 } catch (error) {
                                     console.error('Error adding note:', error);
                                     alert('Failed to add note');
@@ -1037,6 +1083,19 @@ async def get_index():
                             }
                         });
 
+                        document.addEventListener('DOMContentLoaded', () => {
+                            const form = document.getElementById('noteForm');
+                            const noteInput = document.getElementById('noteInput');
+
+                            form.addEventListener('submit', handleSubmit);
+
+                            noteInput.addEventListener('keydown', (e) => {
+                                if (e.ctrlKey && e.key === 'Enter') {
+                                    e.preventDefault();
+                                    handleSubmit(e);
+                                }
+                            });
+                        });
                         async function submitNoteForm() {
                             const titleInput = document.getElementById('noteTitle');
                             const noteInput = document.getElementById('noteInput');
@@ -1066,37 +1125,6 @@ async def get_index():
                                 alert('Failed to add note');
                             }
                         }
-
-                        document.getElementById('noteForm').addEventListener('submit', async (e) => {
-                            e.preventDefault();
-                            const titleInput = document.getElementById('noteTitle');
-                            const noteInput = document.getElementById('noteInput');
-                            const title = titleInput.value.trim();
-                            const content = noteInput.value.trim();
-                            
-                            if (!content) return;
-
-                            try {
-                                const response = await fetch('/api/notes', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ title, content })
-                                });
-
-                                if (!response.ok) {
-                                    throw new Error('Failed to add note');
-                                }
-                                
-                                titleInput.value = '';
-                                noteInput.value = '';
-                                noteInput.style.height = 'auto';
-
-                                await loadNotes();
-                            } catch (error) {
-                                console.error('Error adding note:', error);
-                                alert('Failed to add note');
-                            }
-                        });
 
                         document.addEventListener('click', async (event) => {
                             if (event.target.matches('input[type="checkbox"]')) {
@@ -1163,14 +1191,15 @@ async def get_index():
                         document.addEventListener('DOMContentLoaded', updateActiveTasks);
 
                         document.getElementById('noteInput').placeholder = `Create note in MARKDOWN format... [Ctrl+Enter to save]
-Drag & Drop images to upload...
+Drag & Drop images/files to upload...
 Start Links with + to archive websites...
 
-# Scroll for Markdown Examples
+# Scroll down for Markdown Examples
 - [ ] Tasks
 - Bullets
     - Sub-bullets
-- **Bold** and *italic*`;
+- **Bold** and *italic*
+- 2 spaces after a line to create a line break OR extra line between paragraphs`;
                         loadNotes();
 
                         const noteInput = document.getElementById('noteInput');
@@ -1256,6 +1285,12 @@ Start Links with + to archive websites...
                             
                             const content = document.getElementById('editNoteContent').value;
                             
+                            // Check if content contains a +http link
+                            const hasArchiveLink = content.includes('+http');
+                            if (hasArchiveLink) {
+                                $('.loading-overlay').css('display', 'flex');
+                            }
+
                             try {
                                 const response = await fetch(`/api/notes/${currentEditingNoteIndex}`, {
                                     method: 'PUT',
@@ -1268,9 +1303,13 @@ Start Links with + to archive websites...
                                 // Close overlay and refresh notes
                                 closeEditOverlay();
                                 await loadNotes();
+                                loadLinks();
                             } catch (error) {
                                 console.error('Error updating note:', error);
                                 alert('Failed to update note');
+                            } finally {
+                                // Hide loading overlay
+                                $('.loading-overlay').css('display', 'none');
                             }
                         }
 
@@ -1279,23 +1318,37 @@ Start Links with + to archive websites...
                             currentEditingNoteIndex = null;
                         }
 
-                        // Add tab capture for edit overlay textarea
                         document.addEventListener('DOMContentLoaded', function() {
                             const editNoteContent = document.getElementById('editNoteContent');
                             
-                            editNoteContent.addEventListener('keydown', function(e) {
-                                if (e.key === 'Tab') {
-                                    e.preventDefault();
-                                    
-                                    // Get cursor position
-                                    const start = this.selectionStart;
-                                    const end = this.selectionEnd;
-                                    
-                                    // Insert tab at cursor position
-                                    this.value = this.value.substring(0, start) + '\t' + this.value.substring(end);
-                                    
-                                    // Move cursor after tab
-                                    this.selectionStart = this.selectionEnd = start + 1;
+                            editNoteContent.addEventListener('dragover', (e) => {
+                                e.preventDefault();
+                            });
+
+                            editNoteContent.addEventListener('drop', async (e) => {
+                                e.preventDefault();
+                                const files = e.dataTransfer.files;
+                                if (files.length > 0) {
+                                    const file = files[0];
+                                    const formData = new FormData();
+                                    formData.append('file', file);
+
+                                    try {
+                                        const response = await fetch('/api/upload-file', {
+                                            method: 'POST',
+                                            body: formData
+                                        });
+
+                                        if (response.ok) {
+                                            const { filePath } = await response.json();
+                                            const markdownLink = `![${file.name}](<${filePath}>)`;
+                                            insertAtCursor(editNoteContent, markdownLink);
+                                        } else {
+                                            alert('Failed to upload file');
+                                        }
+                                    } catch (error) {
+                                        console.error('Error uploading image:', error);
+                                    }
                                 }
                             });
                         });
@@ -1510,21 +1563,22 @@ async def update_note(note_index: int, note: Note):
     notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
     
     if 0 <= note_index < len(notes):
-        # Process any new +https:// links in the updated content
-        processed_content = await process_plus_links(note.content)
+        # Process links and get both HTML and Markdown versions
+        processed = await process_plus_links(note.content)
         
         # Get the original timestamp from the note
         original_timestamp = notes[note_index].split('\n')[0]
         
-        # Format updated note with original timestamp
+        # Format updated note with original timestamp and markdown content
         title = f" - {note.title}" if note.title else ""
-        formatted_note = f"{original_timestamp}{title}\n\n{processed_content.strip()}"  # Keep double newline after header
+        # Add two spaces and newline for a hard break in Markdown
+        formatted_note = f"{original_timestamp}{title}  \n{processed['markdown'].strip()}"
         
         # Replace the note at the specified index
         notes[note_index] = formatted_note
         
         # Join all notes back together with consistent separator
-        updated_content = f"\n---\n\n".join(notes)  # Add newlines around separator
+        updated_content = f"\n---\n\n".join(notes)
         
         # Write back to file
         with notes_file.open('w') as f:
@@ -1552,7 +1606,8 @@ async def process_plus_links(content):
                     title = title_parts[0].replace('_', ' ')
                     display_timestamp = datetime.strptime(timestamp, "%Y_%m_%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
                     
-                    return (
+                    # Create both HTML and Markdown versions
+                    html_version = (
                         f'<div class="archived-link">'
                         f'<a href="{url}">{title}</a><br/>'
                         f'<span class="archive-reference">'
@@ -1560,8 +1615,15 @@ async def process_plus_links(content):
                         f'</span>'
                         f'</div>'
                     )
+                    
+                    markdown_version = f"[{title} - [{display_timestamp}]](/assets/sites/{Path(local_path).name})"  # Regular Markdown link
+                    
+                    return {
+                        'html': html_version,
+                        'markdown': markdown_version
+                    }
             
-        return url
+        return {'html': url, 'markdown': url}
 
     pattern = r'\+((https?://)[^\s]+)'
     matches = re.finditer(pattern, content)
@@ -1570,11 +1632,18 @@ async def process_plus_links(content):
         replacement = await replace_link(match)
         replacements.append((match.start(), match.end(), replacement))
     
-    result = list(content)
-    for start, end, replacement in reversed(replacements):
-        result[start:end] = replacement
+    # Create both HTML and Markdown versions of the content
+    html_result = list(content)
+    markdown_result = list(content)
     
-    return ''.join(result)
+    for start, end, replacement in reversed(replacements):
+        html_result[start:end] = replacement['html']
+        markdown_result[start:end] = replacement['markdown']
+    
+    return {
+        'html': ''.join(html_result),
+        'markdown': ''.join(markdown_result)
+    }
 
 @app.post("/api/notes")
 async def add_note(note: Note):
@@ -1980,6 +2049,24 @@ async def shutdown():
     
     return JSONResponse({"status": "shutting down"})
 
+def open_browser(url):
+    system = platform.system()
+    try:
+        if system == "Windows":
+            webbrowser.open(url, new=2)
+        elif system == "Darwin":  # macOS
+            webbrowser.get('safari').open(url, new=2)
+        elif system == "Linux":
+            if "microsoft" in platform.uname().release.lower():
+                # Windows Subsystem for Linux
+                webbrowser.get('windows-default').open(url, new=2)
+            else:
+                webbrowser.open(url, new=2)
+        else:
+            webbrowser.open(url, new=2)
+    except webbrowser.Error as e:
+        print(f"Could not open browser: {e}. Please open manually.")
+
 def main():
     print("Running noteflow...")
     # Get current directory name
@@ -1991,8 +2078,8 @@ def main():
     # Initialize notes file
     init_notes_file()
     
-    # Open browser
-    webbrowser.open(f"http://localhost:{port}")
+    # Open web browser before starting server
+    open_browser(f'http://localhost:{port}')
     
     # Configure logging to suppress access logs
     log_config = uvicorn.config.LOGGING_CONFIG
