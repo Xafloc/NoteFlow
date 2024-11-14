@@ -955,6 +955,14 @@ async def get_index():
             color: {colors['text_color']};
             padding: 5px;
         }}
+        .delete-label {{
+            color: {colors['accent']};
+            margin-left: 4px;  /* Add some spacing between edit and delete labels */
+        }}
+        .delete-label:hover {{
+            color: {colors['accent']};
+            text-decoration: underline;
+        }}
     </style>
 """
 
@@ -1000,49 +1008,6 @@ async def get_index():
                         $(document).ready(function() {
                             loadNotes();
                             loadLinks();
-                            
-                            // Single form submission handler
-                            async function handleSubmit(e) {
-                                e.preventDefault();
-                                const title = $('#noteTitle').val().trim();
-                                const content = $('#noteInput').val().trim();
-
-                                if (!content) return;
-
-                                // Check if content contains a +http link
-                                const hasArchiveLink = content.includes('+http');
-                                if (hasArchiveLink) {
-                                    $('.loading-overlay').css('display', 'flex');
-                                }
-
-                                try {
-                                    const response = await fetch('/api/notes', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ title, content })
-                                    });
-
-                                    if (!response.ok) {
-                                        throw new Error('Failed to add note');
-                                    }
-
-                                    // Clear inputs
-                                    $('#noteTitle').val('');
-                                    $('#noteInput').val('');
-                                    $('#noteInput').css('height', 'auto');
-
-                                    // Refresh both notes and links
-                                    await loadNotes();
-                                    loadLinks();
-
-                                } catch (error) {
-                                    console.error('Error adding note:', error);
-                                    alert('Failed to add note');
-                                } finally {
-                                    // Hide loading overlay
-                                    $('.loading-overlay').css('display', 'none');
-                                }
-                            }
 
                             // Form submission via button
                             $('#noteForm').on('submit', handleSubmit);
@@ -1488,12 +1453,75 @@ Start Links with + to archive websites...
             }}
         }}
 
+        async function deleteNote(noteIndex) {{
+            if (!confirm('Are you sure you want to delete this note?')) {{
+                return;
+            }}
+            try {{
+                const response = await fetch(`/api/notes/${{noteIndex}}`, {{
+                    method: 'DELETE',
+                    headers: {{
+                        'Content-Type': 'application/json'
+                    }}
+                }});
+                if (!response.ok) {{
+                    throw new Error('Failed to delete note');
+                }}
+                await loadNotes();
+                loadLinks();
+            }} catch (error) {{
+                console.error('Error deleting note:', error);
+                alert('Failed to delete note');
+            }}
+        }}
+
+        async function handleSubmit(e) {{
+            e.preventDefault();
+            const title = $('#noteTitle').val().trim();
+            const content = $('#noteInput').val().trim();
+
+            if (!content) return;
+
+            // Check if content contains a +http link
+            const hasArchiveLink = content.includes('+http');
+            if (hasArchiveLink) {{
+                $('.loading-overlay').css('display', 'flex');
+            }}
+
+            try {{
+                const response = await fetch('/api/notes', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ title, content }})
+                }});
+
+                if (!response.ok) {{
+                    throw new Error('Failed to add note');
+                }}
+
+                // Clear inputs
+                $('#noteTitle').val('');
+                $('#noteInput').val('');
+                $('#noteInput').css('height', 'auto');
+
+                // Refresh both notes and links
+                await loadNotes();
+                loadLinks();
+
+            }} catch (error) {{
+                console.error('Error adding note:', error);
+                alert('Failed to add note');
+            }} finally {{
+                // Hide loading overlay
+                $('.loading-overlay').css('display', 'none');
+            }}
+        }}
+    
         // Initialize when the page loads
         document.addEventListener('DOMContentLoaded', function() {{
             initializeTheme();
         }});
         
-        // ... rest of your JavaScript ...
     </script>
 </head>
     """ + html_content
@@ -1528,8 +1556,10 @@ async def get_notes():
                 <span>e</span>
             </div>
             <div class="notes-item markdown-body">
-                <div class="post-header" onclick="editNote({note_index})" style="cursor: pointer;">
-                    Posted: {timestamp} <span class="edit-label">(click to edit)</span>
+                <div class="post-header">
+                    Posted: {timestamp} 
+                    <span class="edit-label" onclick="editNote({note_index});" style="cursor: pointer;">(click to edit)</span>
+                    <span class="delete-label" onclick="deleteNote({note_index});" style="cursor: pointer;">(delete)</span>
                 </div>
                 {rendered_content}
             </div>
@@ -1579,6 +1609,28 @@ async def update_note(note_index: int, note: Note):
         
         # Join all notes back together with consistent separator
         updated_content = f"\n---\n\n".join(notes)
+        
+        # Write back to file
+        with notes_file.open('w') as f:
+            f.write(updated_content)
+        
+        return {"status": "success"}
+    
+    raise HTTPException(status_code=404, detail="Note not found")
+
+# Add delete endpoint
+@app.delete("/api/notes/{note_index}")
+async def delete_note(note_index: int):
+    notes_file = init_notes_file()
+    content = notes_file.read_text()
+    notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
+    
+    if 0 <= note_index < len(notes):
+        # Remove the note at the specified index
+        notes.pop(note_index)
+        
+        # Join remaining notes back together with consistent separator
+        updated_content = f"\n{NOTE_SEPARATOR}\n".join(notes)
         
         # Write back to file
         with notes_file.open('w') as f:
