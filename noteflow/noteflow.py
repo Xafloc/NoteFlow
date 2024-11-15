@@ -132,6 +132,7 @@ THEMES = {
         'background': '#1e3c72',          # Main background color
         'accent': '#ff8c00',              # Accent color
         'text_color': '#757575',          # Global text color
+        'link_color': '#4a90e2',          # Link color
 
         # Labels
         'label_background': '#000000',    # Label backgrounds
@@ -170,6 +171,7 @@ THEMES = {
         'background': '#1e3c72',          # Main background color
         'accent': '#ff8c00',              # Accent color
         'text_color': '#757575',          # Global text color
+        'link_color': '#4a90e2',          # Link color
 
         # Labels
         'label_background': '#000000',    # Label backgrounds
@@ -186,13 +188,6 @@ THEMES = {
         # Input fields
         'input_background': '#313437',    # Input backgrounds
         'input_border': '#26292c',        # Input borders
-
-        # Edit popup
-        'edit_overlay_background': '#313437',  # Popup overlay
-        'edit_background': '#26292c',         # Popup background
-        'edit_border': '#000000',             # Popup border
-        'edit_input_background': '#26292c',    # Popup input background
-        'edit_input_border': '#26292c',        # Popup input border
 
         # Code highlighting
         'code_background': '#fdf6e3',     # Code block background
@@ -215,6 +210,7 @@ THEMES = {
         'background': '#313437',          # Main background color
         'accent': '#df8a3e',              # Accent color
         'text_color': '#757575',          # Global text color
+        'link_color': '#4a90e2',          # Link color
 
         # Labels
         'label_background': '#313437',    # Label backgrounds
@@ -231,13 +227,6 @@ THEMES = {
         # Input fields
         'input_background': '#26292c',    # Input backgrounds
         'input_border': '#26292c',        # Input borders
-
-        # Edit popup
-        'edit_overlay_background': '#313437',  # Popup overlay
-        'edit_background': '#26292c',         # Popup background
-        'edit_border': '#000000',             # Popup border
-        'edit_input_background': '#26292c',    # Popup input background
-        'edit_input_border': '#26292c',        # Popup input border
 
         # Code highlighting
         'code_background': '#fdf6e3',     # Code block background
@@ -924,6 +913,16 @@ async def get_index():
         .flash-highlight-delay2 {{
             animation: flash 0.75s ease-out 0.2s;
         }}
+
+        .note-title {{
+            color: {colors['link_color']};
+            cursor: pointer;
+            text-decoration: none;
+            display: inline;
+        }}
+        .note-title:hover {{
+            opacity: 0.8;  /* Subtle hover effect */
+        }}
     </style>
 """
 
@@ -1476,8 +1475,7 @@ async def get_notes():
             </div>
             <div class="notes-item markdown-body">
                 <div class="post-header">
-                    Posted: {timestamp} 
-                    <span class="edit-label" onclick="editNote({note_index});" style="cursor: pointer;">(click to edit)</span>
+                    <span class="note-title" onclick="editNote({note_index});">Posted: {timestamp} (click to edit)</span>
                     <span class="delete-label" onclick="deleteNote({note_index});" style="cursor: pointer;">(delete)</span>
                 </div>
                 {rendered_content}
