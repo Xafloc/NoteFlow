@@ -149,13 +149,6 @@ THEMES = {
         'input_background': '#ffffff',    # Input backgrounds
         'input_border': '#26292c',        # Input borders
 
-        # Edit popup
-        'edit_overlay_background': '#313437',  # Popup overlay
-        'edit_background': '#ffffff',         # Popup background
-        'edit_border': '#000000',             # Popup border
-        'edit_input_background': '#ffffff',    # Popup input background
-        'edit_input_border': '#26292c',        # Popup input border
-
         # Code highlighting
         'code_background': '#fdf6e3',     # Code block background
         'code_style': 'github',           # Highlight.js theme
@@ -823,56 +816,6 @@ async def get_index():
             display: block;
             margin: 10px auto;
         }}
-        .edit-overlay {{
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: {colors['edit_overlay_background']};
-            z-index: 1000;
-        }}
-        .edit-container {{
-            position: relative;
-            width: 80%;
-            max-width: 800px;
-            margin: 50px auto;
-            background: {colors['edit_background']};
-            padding: 5px;
-            border: 1px solid {colors['edit_border']};
-            border-top-left-radius: 0px;
-            border-top-right-radius: 7px;
-            border-bottom-right-radius: 7px;
-            border-bottom-left-radius: 7px;
-            font-family: 'space_monoregular', Arial, sans-serif;
-        }}
-        .edit-textarea {{
-            width: 100%;
-            min-height: 300px;
-            margin: 10px 0;
-            padding: 8px;
-            box-sizing: border-box;
-            border: 1px solid {colors['edit_input_border']};
-            background-color: {colors['edit_input_background']};
-            color: {colors['text_color']};
-            font-family: inherit;
-            font-size: 0.9rem;
-            resize: vertical;
-        }}
-        .edit-buttons {{
-            text-align: right;
-            padding: 5px;
-        }}
-        .edit-button {{
-            background: #000;
-            color: {colors['accent']};
-            border: none;
-            padding: 5px 15px;
-            margin-left: 10px;
-            cursor: pointer;
-            font-family: inherit;
-        }}
         .admin-panel {{
             position: fixed;
             bottom: 15px;
@@ -963,6 +906,24 @@ async def get_index():
             color: {colors['accent']};
             text-decoration: underline;
         }}
+
+        @keyframes flash {{ 
+            0% {{ background-color: transparent; }}
+            10% {{ background-color: rgba(255, 255, 255, 0.8); }}
+            100% {{ background-color: transparent; }}
+        }}
+
+        .flash-highlight {{
+            animation: flash 0.75s ease-out;
+        }}
+
+        .flash-highlight-delay1 {{
+            animation: flash 0.75s ease-out 0.1s;
+        }}
+
+        .flash-highlight-delay2 {{
+            animation: flash 0.75s ease-out 0.2s;
+        }}
     </style>
 """
 
@@ -1005,20 +966,132 @@ async def get_index():
                 </div>
                 <div id="linksSection" class="links-box">
                     <script>
+                        const handleSubmit = async (e) => {
+                            e.preventDefault();
+                            let userTitle = $('#noteTitle').val().trim();
+                            const content = $('#noteInput').val().trim();
+                            
+                            if (!content) return;
+                            
+                            // Check if we're editing an existing note
+                            const editingNoteIndex = $('#noteForm').attr('data-editing-note');
+                            const isEditing = editingNoteIndex !== undefined;
+                            
+                            // Create the new timestamp title
+                            const now = new Date();
+                            const timestamp = now.toISOString().slice(0, 19).replace('T', ' ');
+                            const title = `## ${timestamp} - ${userTitle}`;
+                            
+                            // Check if content contains a +http link
+                            const hasArchiveLink = content.includes('+http');
+                            if (hasArchiveLink) {
+                                $('.loading-overlay').css('display', 'flex');
+                            }
+                            
+                            try {
+                                const url = isEditing ? `/api/notes/${editingNoteIndex}` : '/api/notes';
+                                const method = isEditing ? 'PUT' : 'POST';
+                                
+                                const response = await fetch(url, {
+                                    method: method,
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ 
+                                        title: title,  // Send just the new title
+                                        content: content 
+                                    })
+                                });
+                                
+                                if (!response.ok) {
+                                    throw new Error(`Failed to ${isEditing ? 'update' : 'add'} note`);
+                                }
+                                
+                                // Clear form and editing state
+                                $('#noteTitle').val('');
+                                $('#noteInput').val('');
+                                $('#noteInput').css('height', 'auto');
+                                $('#noteForm').removeAttr('data-editing-note');
+                                
+                                // Refresh both notes and links
+                                await loadNotes();
+                                loadLinks();
+                                
+                            } catch (error) {
+                                console.error(`Error ${isEditing ? 'updating' : 'adding'} note:`, error);
+                                alert(`Failed to ${isEditing ? 'update' : 'add'} note`);
+                            } finally {
+                                $('.loading-overlay').css('display', 'none');
+                            }
+                        }; // Removed extra }; here
+
                         $(document).ready(function() {
+                            // Form handling
+                            const form = $('#noteForm');
+                            const noteInput = $('#noteInput');
+
+                            // Initialize notes and links
                             loadNotes();
                             loadLinks();
+                            updateActiveTasks();
 
-                            // Form submission via button
-                            $('#noteForm').on('submit', handleSubmit);
+                            // Form submission handlers
+                            form.on('submit', handleSubmit);
 
-                            // Form submission via Ctrl+Enter
-                            $('#noteInput').on('keydown', function(e) {
+                            // Ctrl+Enter handler
+                            noteInput.on('keydown', function(e) {
                                 if (e.ctrlKey && e.key === 'Enter') {
                                     e.preventDefault();
                                     handleSubmit(e);
                                 }
                             });
+
+                            // Tab handler
+                            noteInput.on('keydown', function(e) {
+                                if (e.key === 'Tab') {
+                                    e.preventDefault();
+                                    const start = this.selectionStart;
+                                    const end = this.selectionEnd;
+                                    this.value = this.value.substring(0, start) + '\t' + this.value.substring(end);
+                                    this.selectionStart = this.selectionEnd = start + 1;
+                                }
+                            });
+
+                            // Drag and drop handlers
+                            const editNoteContent = $('#editNoteContent');
+                            if (editNoteContent.length) {  // Check if element exists
+                                editNoteContent.on('dragover', function(e) {
+                                    e.preventDefault();
+                                });
+
+                                editNoteContent.on('drop', async function(e) {
+                                    e.preventDefault();
+                                    const files = e.dataTransfer.files;
+                                    if (files.length > 0) {
+                                        const file = files[0];
+                                        const formData = new FormData();
+                                        formData.append('file', file);
+
+                                        try {
+                                            const response = await fetch('/api/upload-file', {
+                                                method: 'POST',
+                                                body: formData
+                                            });
+
+                                            if (response.ok) {
+                                                const { filePath } = await response.json();
+                                                const markdownLink = `![${file.name}](<${filePath}>)`;
+                                                insertAtCursor(editNoteContent[0], markdownLink);
+                                            } else {
+                                                alert('Failed to upload file');
+                                            }
+                                        } catch (error) {
+                                            console.error('Error uploading image:', error);
+                                        }
+                                    }
+                                });
+                            }
+
+                            // Initialize theme selector
+                            initializeTheme();
                         });
 
                         function loadLinks() {
@@ -1041,26 +1114,6 @@ async def get_index():
                             await updateActiveTasks();
                         }
 
-                        document.getElementById('noteForm').addEventListener('keydown', async (e) => {
-                            if (e.ctrlKey && e.key === 'Enter') {
-                                e.preventDefault();
-                                await handleSubmit(e);
-                            }
-                        });
-
-                        document.addEventListener('DOMContentLoaded', () => {
-                            const form = document.getElementById('noteForm');
-                            const noteInput = document.getElementById('noteInput');
-
-                            form.addEventListener('submit', handleSubmit);
-
-                            noteInput.addEventListener('keydown', (e) => {
-                                if (e.ctrlKey && e.key === 'Enter') {
-                                    e.preventDefault();
-                                    handleSubmit(e);
-                                }
-                            });
-                        });
                         async function submitNoteForm() {
                             const titleInput = document.getElementById('noteTitle');
                             const noteInput = document.getElementById('noteInput');
@@ -1207,116 +1260,45 @@ Start Links with + to archive websites...
                             input.selectionStart = input.selectionEnd = start + textToInsert.length;
                         }
 
-                        document.addEventListener('DOMContentLoaded', function() {
-                            const noteInput = document.getElementById('noteInput');
-                            
-                            noteInput.addEventListener('keydown', function(e) {
-                                if (e.key === 'Tab') {
-                                    e.preventDefault();
-                                    
-                                    // Get cursor position
-                                    const start = this.selectionStart;
-                                    const end = this.selectionEnd;
-                                    
-                                    // Insert tab at cursor position
-                                    this.value = this.value.substring(0, start) + '\t' + this.value.substring(end);
-                                    
-                                    // Move cursor after tab
-                                    this.selectionStart = this.selectionEnd = start + 1;
-                                }
-                            });
-                        });
-
                         let currentEditingNoteIndex = null;
 
                         async function editNote(noteIndex) {
-                            currentEditingNoteIndex = noteIndex;
-                            
                             try {
                                 const response = await fetch(`/api/notes/${noteIndex}`);
                                 if (!response.ok) throw new Error('Failed to fetch note');
                                 
                                 const noteData = await response.json();
-                                document.getElementById('editNoteContent').value = noteData.content;
-                                document.getElementById('editOverlay').style.display = 'block';
+                                
+                                // Populate the form fields
+                                document.getElementById('noteTitle').value = noteData.title || '';
+                                document.getElementById('noteInput').value = noteData.content;
+                                
+                                // Store the note index being edited
+                                document.getElementById('noteForm').setAttribute('data-editing-note', noteIndex);
+                                
+                                // Add flash effects with cascading timing
+                                const inputBox = document.querySelector('.input-box');
+                                inputBox.classList.add('flash-highlight');
+                                document.getElementById('noteTitle').classList.add('flash-highlight-delay1');
+                                document.getElementById('noteInput').classList.add('flash-highlight-delay2');
+                                
+                                // Remove the classes after animations complete
+                                setTimeout(() => {
+                                    inputBox.classList.remove('flash-highlight');
+                                    document.getElementById('noteTitle').classList.remove('flash-highlight-delay1');
+                                    document.getElementById('noteInput').classList.remove('flash-highlight-delay2');
+                                }, 1000); // Wait for all animations to complete
+                                
+                                // Scroll to the top of the page
+                                window.scrollTo(0, 0);
+                                
+                                // Focus the input field
+                                document.getElementById('noteInput').focus();
                             } catch (error) {
                                 console.error('Error fetching note:', error);
                                 alert('Failed to load note for editing');
                             }
                         }
-
-                        async function saveNote() {
-                            if (currentEditingNoteIndex === null) return;
-                            
-                            const content = document.getElementById('editNoteContent').value;
-                            
-                            // Check if content contains a +http link
-                            const hasArchiveLink = content.includes('+http');
-                            if (hasArchiveLink) {
-                                $('.loading-overlay').css('display', 'flex');
-                            }
-
-                            try {
-                                const response = await fetch(`/api/notes/${currentEditingNoteIndex}`, {
-                                    method: 'PUT',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ content })
-                                });
-                                
-                                if (!response.ok) throw new Error('Failed to update note');
-                                
-                                // Close overlay and refresh notes
-                                closeEditOverlay();
-                                await loadNotes();
-                                loadLinks();
-                            } catch (error) {
-                                console.error('Error updating note:', error);
-                                alert('Failed to update note');
-                            } finally {
-                                // Hide loading overlay
-                                $('.loading-overlay').css('display', 'none');
-                            }
-                        }
-
-                        function closeEditOverlay() {
-                            document.getElementById('editOverlay').style.display = 'none';
-                            currentEditingNoteIndex = null;
-                        }
-
-                        document.addEventListener('DOMContentLoaded', function() {
-                            const editNoteContent = document.getElementById('editNoteContent');
-                            
-                            editNoteContent.addEventListener('dragover', (e) => {
-                                e.preventDefault();
-                            });
-
-                            editNoteContent.addEventListener('drop', async (e) => {
-                                e.preventDefault();
-                                const files = e.dataTransfer.files;
-                                if (files.length > 0) {
-                                    const file = files[0];
-                                    const formData = new FormData();
-                                    formData.append('file', file);
-
-                                    try {
-                                        const response = await fetch('/api/upload-file', {
-                                            method: 'POST',
-                                            body: formData
-                                        });
-
-                                        if (response.ok) {
-                                            const { filePath } = await response.json();
-                                            const markdownLink = `![${file.name}](<${filePath}>)`;
-                                            insertAtCursor(editNoteContent, markdownLink);
-                                        } else {
-                                            alert('Failed to upload file');
-                                        }
-                                    } catch (error) {
-                                        console.error('Error uploading image:', error);
-                                    }
-                                }
-                            });
-                        });
 
                         async function saveTheme() {
                             const selectedTheme = document.getElementById('themeSelector').value;
@@ -1379,22 +1361,6 @@ Start Links with + to archive websites...
         <div style="text-align: center;">
             <div class="loading-spinner"></div>
             <div class="loading-text">Archiving website...</div>
-        </div>
-    </div>
-    <!-- Edit Note Overlay -->
-    <div id="editOverlay" class="edit-overlay">
-        <div class="edit-container">
-            <div class="section-label">
-                <span>e</span>
-                <span>d</span>
-                <span>i</span>
-                <span>t</span>
-            </div>
-            <textarea id="editNoteContent" class="edit-textarea"></textarea>
-            <div class="edit-buttons">
-                <button onclick="saveNote()" class="edit-button">Save</button>
-                <button onclick="closeEditOverlay()" class="edit-button">Cancel</button>
-            </div>
         </div>
     </div>
     <!-- Add before </body> -->
@@ -1474,53 +1440,6 @@ Start Links with + to archive websites...
                 alert('Failed to delete note');
             }}
         }}
-
-        async function handleSubmit(e) {{
-            e.preventDefault();
-            const title = $('#noteTitle').val().trim();
-            const content = $('#noteInput').val().trim();
-
-            if (!content) return;
-
-            // Check if content contains a +http link
-            const hasArchiveLink = content.includes('+http');
-            if (hasArchiveLink) {{
-                $('.loading-overlay').css('display', 'flex');
-            }}
-
-            try {{
-                const response = await fetch('/api/notes', {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ title, content }})
-                }});
-
-                if (!response.ok) {{
-                    throw new Error('Failed to add note');
-                }}
-
-                // Clear inputs
-                $('#noteTitle').val('');
-                $('#noteInput').val('');
-                $('#noteInput').css('height', 'auto');
-
-                // Refresh both notes and links
-                await loadNotes();
-                loadLinks();
-
-            }} catch (error) {{
-                console.error('Error adding note:', error);
-                alert('Failed to add note');
-            }} finally {{
-                // Hide loading overlay
-                $('.loading-overlay').css('display', 'none');
-            }}
-        }}
-    
-        // Initialize when the page loads
-        document.addEventListener('DOMContentLoaded', function() {{
-            initializeTheme();
-        }});
         
     </script>
 </head>
@@ -1575,13 +1494,21 @@ async def get_notes():
 async def get_note(note_index: int):
     notes_file = init_notes_file()
     content = notes_file.read_text()
-    notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
+    notes = [note.strip() for note in content.split("---") if note.strip()]
     
     if 0 <= note_index < len(notes):
         lines = notes[note_index].split('\n')
         timestamp = lines[0]
+        
+        # Extract title if it exists (assuming it's in the format "## timestamp - title")
+        title = ""
+        if timestamp.startswith("##"):
+            parts = timestamp.split(" - ", 1)
+            if len(parts) > 1:
+                title = parts[1]
+        
         note_content = '\n'.join(lines[1:])
-        return {"timestamp": timestamp, "content": note_content}
+        return {"timestamp": timestamp, "content": note_content, "title": title}
     
     raise HTTPException(status_code=404, detail="Note not found")
 
@@ -1596,23 +1523,17 @@ async def update_note(note_index: int, note: Note):
         # Process links and get both HTML and Markdown versions
         processed = await process_plus_links(note.content)
         
-        # Get the original timestamp from the note
-        original_timestamp = notes[note_index].split('\n')[0]
-        
-        # Format updated note with original timestamp and markdown content
-        title = f" - {note.title}" if note.title else ""
-        # Add two spaces and newline for a hard break in Markdown
-        formatted_note = f"{original_timestamp}{title}  \n{processed['markdown'].strip()}"
+        # Use the new title directly (it already includes timestamp from client)
+        formatted_note = f"{note.title}\n{processed['markdown'].strip()}"
         
         # Replace the note at the specified index
         notes[note_index] = formatted_note
         
         # Join all notes back together with consistent separator
-        updated_content = f"\n---\n\n".join(notes)
+        updated_content = f"\n{NOTE_SEPARATOR}\n".join(notes)
         
         # Write back to file
-        with notes_file.open('w') as f:
-            f.write(updated_content)
+        notes_file.write_text(updated_content)
         
         return {"status": "success"}
     
