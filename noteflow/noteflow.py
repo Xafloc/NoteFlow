@@ -30,73 +30,51 @@ from asyncio import get_event_loop
 from fastapi.responses import JSONResponse
 import psutil  # You might need to: pip install psutil
 
-def saveFullHtmlPage(url, pagepath='page', session=requests.Session(), html=None):
-    """Save web page html and supported contents"""
-    def savenRename(soup, pagefolder, session, url, tag, inner):
-        if not os.path.exists(pagefolder):
-            os.makedirs(pagefolder, exist_ok=True)
-        
-        for res in soup.findAll(tag):
-            if res.has_attr(inner):
-                try:
-                    # Get the URL and remove query parameters
-                    original_url = res.get(inner)
-                    clean_url = original_url.split('?')[0]
-                    
-                    # Get original extension
-                    original_ext = os.path.splitext(clean_url)[1]
-                    if original_ext:
-                        # Keep original extension if it exists
-                        ext = original_ext
-                    else:
-                        # Try to guess extension from content type
-                        ext = mimetypes.guess_extension(session.get(clean_url).headers.get('content-type', '')) or '.txt'
-                    
-                    # Create base filename without extension
-                    base_filename = os.path.splitext(os.path.basename(clean_url))[0]
-                    if not base_filename:  # If filename is empty after cleaning
-                        continue
-                        
-                    # Clean the base filename
-                    base_filename = re.sub(r'\W+', '_', base_filename)
-                    base_filename = base_filename.strip('_')
-                    
-                    # Combine clean base filename with original extension
-                    filename = base_filename + ext
-                    
-                    fileurl = urljoin(url, original_url)
-                    filepath = os.path.join(pagefolder, filename)
-                    
-                    # Update the reference in the HTML
-                    res[inner] = os.path.join(os.path.basename(pagefolder), filename)
-                    
-                    if not os.path.isfile(filepath):
-                        try:
-                            response = session.get(fileurl)
-                            if response.status_code == 200:
-                                with open(filepath, 'wb') as file:
-                                    file.write(response.content)
-                        except Exception as e:
-                            print(f"Failed to download {fileurl}: {e}")
-                            continue
-                            
-                except Exception as exc:
-                    print(f"Error processing {tag} {inner}: {exc}")
-                    continue
+APP_PORT = None
 
-    if not html:
-        html = session.get(url).text
+# Add this function to set the port when the app starts
+def set_app_port(port: int):
+    global APP_PORT
+    APP_PORT = port
     
-    soup = BeautifulSoup(html, "html.parser")
-    path, _ = os.path.splitext(pagepath)
-    pagefolder = path+'_files'
-    
-    tags_inner = {'img': 'src', 'link': 'href', 'script': 'src'}
-    for tag, inner in tags_inner.items():
-        savenRename(soup, pagefolder, session, url, tag, inner)
-    
-    with open(path+'.html', 'wb') as file:
-        file.write(soup.prettify('utf-8'))
+def saveFullHtmlPage(url, output_path, session=None):
+    """Save a complete webpage with all assets."""
+    try:
+        if session is None:
+            session = requests.Session()
+        
+        response = session.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        base_url = urljoin(url, '/')
+
+        # Handle images (both regular URLs and base64)
+        for img in soup.find_all('img'):
+            src = img.get('src', '')
+            if src.startswith('data:'):
+                # Base64 images are already embedded, skip them
+                continue
+            
+            try:
+                img_url = urljoin(url, src)
+                img_response = session.get(img_url)
+                if img_response.ok:
+                    # Convert to base64
+                    img_type = img_response.headers.get('content-type', 'image/jpeg')
+                    img_data = base64.b64encode(img_response.content).decode('utf-8')
+                    img['src'] = f'data:{img_type};base64,{img_data}'
+            except Exception as e:
+                print(f"Error processing image {src}: {e}")
+                continue
+
+        # ... rest of the function handling other assets ...
+
+        # Save the modified HTML
+        with open(f"{output_path}.html", 'w', encoding='utf-8') as f:
+            f.write(str(soup))
+
+    except Exception as e:
+        print(f"Error saving webpage: {e}")
+        raise
 
 def create_directories():
     # Define the directories to be created relative to the current working directory
@@ -133,6 +111,8 @@ THEMES = {
         'accent': '#ff8c00',              # Accent color
         'text_color': '#757575',          # Global text color
         'link_color': '#4a90e2',          # Link color
+        'visited_link_color': '#7c7c9c',  # Visited link color
+        'hover_link_color': '#66b3ff',    # Hovered link color
 
         # Labels
         'label_background': '#000000',    # Label backgrounds
@@ -172,6 +152,8 @@ THEMES = {
         'accent': '#ff8c00',              # Accent color
         'text_color': '#757575',          # Global text color
         'link_color': '#4a90e2',          # Link color
+        'visited_link_color': '#7c7c9c',  # Visited link color
+        'hover_link_color': '#66b3ff',    # Hovered link color
 
         # Labels
         'label_background': '#000000',    # Label backgrounds
@@ -210,7 +192,9 @@ THEMES = {
         'background': '#313437',          # Main background color
         'accent': '#df8a3e',              # Accent color
         'text_color': '#757575',          # Global text color
-        'link_color': '#4a90e2',          # Link color
+        'link_color': '#66d9ff',          # Link color
+        'visited_link_color': '#8c8c8c',  # Visited link color
+        'hover_link_color': '#00bfff',    # Hovered link color
 
         # Labels
         'label_background': '#313437',    # Label backgrounds
@@ -401,7 +385,6 @@ async def get_index():
             display: flex;
             max-width: 100%;
             margin: 0 auto;
-            padding: 15px;
             gap: 15px;
         }}
         .site-title {{
@@ -424,22 +407,27 @@ async def get_index():
         .left-column, .right-column {{
             display: flex;
             flex-direction: column;
-            gap: 15px;
+            gap: 0px;
         }}
         .left-column {{
             flex: 1;
             display: flex;
             flex-direction: column;
-            gap: 15px;
+            gap: 10px;
             width: 100%;
+            padding-left: 10px;
+            padding-right: 0px;
         }}
         .right-column {{
             flex: 0 0 325px;
             width: 325px;
+            margin-top: 0;  /* Ensure no top margin */
+            padding-top: 0; /* Ensure no top padding */
+            padding-right: 10px;
         }}
         .input-box {{
             background: {colors['box_background']};
-            margin-top: -15px;
+            margin-top: 0px;
             padding: 5px;
             border: 1px solid #000;
             border-top-left-radius: 0px;
@@ -450,7 +438,7 @@ async def get_index():
         }}
         .task-box {{
             background: {colors['box_background']};
-            margin-top: -15px;
+            margin-top: 0px;
             padding: 5px;
             border: 1px solid {colors['tasks_border']};
             border-top-left-radius: 0px;
@@ -654,6 +642,17 @@ async def get_index():
         .markdown-body p {{
             margin: 5px 0;
         }}
+        .markdown-body a {{
+            color: {colors['link_color']} !important;
+            text-decoration: none;
+        }}
+        .markdown-body a:visited {{
+            color: {colors['visited_link_color']} !important;
+        }}
+        .markdown-body a:hover {{
+            color: {colors['hover_link_color']} !important;
+            text-decoration: underline;
+        }}
         .notes-container {{
             width: 100%;
             margin-left: 15px;
@@ -783,7 +782,7 @@ async def get_index():
             display: block;
             margin-left: 20px;
             margin-top: 0px;
-            font-size: 75%;
+            font-size: 100%;
         }}
         .archive-reference + .archive-reference {{
             margin-top: 1px;
@@ -923,6 +922,34 @@ async def get_index():
         .note-title:hover {{
             opacity: 0.8;  /* Subtle hover effect */
         }}
+        .directory-bar {{
+            background: {colors['button_bg']};
+            padding: 2px 6px;
+            margin: 0;  /* Remove all margins */
+            font-size: 0.55rem;
+            font-family: 'space_monoregular', monospace;
+            color: {colors['accent']};
+            display: flex;
+            flex-flow: row nowrap;
+            align-items: center;
+            overflow: hidden;
+        }}
+        .directory-bar-content {{
+            white-space: nowrap;
+            animation: scroll-left 20s linear infinite;
+            max-width: none;
+            padding-right: 50px;
+            flex-shrink: 0;
+            display: inline-block;
+        }}
+        @keyframes scroll-left {{
+            0% {{
+                transform: translate(0, 0);
+            }}
+            100% {{
+                transform: translate(-100%, 0);
+            }}
+        }}
     </style>
 """
 
@@ -950,6 +977,12 @@ async def get_index():
 
         <!-- Right Column -->
         <div class="right-column">
+            <!-- Directory Bar -->
+            <div class="directory-bar">
+                <span class="directory-bar-content">""" + str(Path.cwd().absolute()) + """&nbsp;</span>
+                <span class="directory-bar-content">""" + str(Path.cwd().absolute()) + """&nbsp;</span>
+                <span class="directory-bar-content">""" + str(Path.cwd().absolute()) + """&nbsp;</span>
+            </div>
             <!-- Tasks Box -->
             <div id="activeTasks" class="task-box">
                 <!-- Task items will be dynamically inserted here -->
@@ -1095,8 +1128,9 @@ async def get_index():
 
                         function loadLinks() {
                             $.get('/api/links')
-                                .done(function(html) {
-                                    $('#linksSection').html(html);
+                                .done(function(response) {
+                                    const htmlContent = response.html || response;
+                                    $('#linksSection').html(htmlContent);
                                 })
                                 .fail(function(error) {
                                     console.error('Error loading links:', error);
@@ -1209,7 +1243,7 @@ async def get_index():
 
                         document.getElementById('noteInput').placeholder = `Create note in MARKDOWN format... [Ctrl+Enter to save]
 Drag & Drop images/files to upload...
-Start Links with + to archive websites...
+Start Links with + to archive websites (e.g., +https://www.google.com)
 
 # Scroll down for Markdown Examples
 - [ ] Tasks
@@ -1563,37 +1597,23 @@ async def process_plus_links(content):
     """Process +https:// links in the content and create local copies."""
     async def replace_link(match):
         url = match.group(1)
-        local_path = archive_website(url)
-        if local_path:
-            base_name = Path(local_path).stem
-            parts = base_name.split('_', 4)
+        
+        # Check if URL is pointing to our own server
+        parsed_url = urlparse(url)
+        host = parsed_url.netloc.split(':')[0]
+        is_localhost = host in ('localhost', '127.0.0.1', '0.0.0.0')
+        is_same_port = APP_PORT and str(parsed_url.port) == str(APP_PORT)
+        
+        if is_localhost and is_same_port:
+            # Return URL without the plus and add a note
+            return {
+                'html': f'{url} <em>(self-referencing link removed)</em>',
+                'markdown': f'{url} *(self-referencing link removed)*'
+            }
             
-            if len(parts) >= 5:
-                timestamp = '_'.join(parts[:4])
-                title_domain = parts[4]
-                
-                title_parts = title_domain.rsplit('-', 1)
-                if len(title_parts) >= 2:
-                    title = title_parts[0].replace('_', ' ')
-                    display_timestamp = datetime.strptime(timestamp, "%Y_%m_%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
-                    
-                    # Create both HTML and Markdown versions
-                    html_version = (
-                        f'<div class="archived-link">'
-                        f'<a href="{url}">{title}</a><br/>'
-                        f'<span class="archive-reference">'
-                        f'<a href="/assets/sites/{Path(local_path).name}">site archive [{display_timestamp}]</a>'
-                        f'</span>'
-                        f'</div>'
-                    )
-                    
-                    markdown_version = f"[{title} - [{display_timestamp}]](/assets/sites/{Path(local_path).name})"  # Regular Markdown link
-                    
-                    return {
-                        'html': html_version,
-                        'markdown': markdown_version
-                    }
-            
+        result = archive_website(url)
+        if result:
+            return result
         return {'html': url, 'markdown': url}
 
     pattern = r'\+((https?://)[^\s]+)'
@@ -1624,10 +1644,10 @@ async def add_note(note: Note):
     # Process +https:// links in the content
     processed_content = await process_plus_links(note.content)
     
-    # Format new note
+    # Format new note - use the markdown version for notes.md
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     title = f" - {note.title}" if note.title else ""
-    formatted_note = f"## {timestamp}{title}\n\n{processed_content}"
+    formatted_note = f"## {timestamp}{title}\n\n{processed_content['markdown']}"  # Use markdown version
     
     # Combine with existing content
     if current_content:
@@ -1758,7 +1778,7 @@ def archive_website(url):
         }
         
         print(f"Fetching: {url}")
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -1769,6 +1789,7 @@ def archive_website(url):
         title = clean_title(soup.title.string.strip()) if soup.title else "Untitled"
         domain = urlparse(url).netloc
         base_filename = f"{timestamp}_{title}-{domain}"
+        html_filename = f"{base_filename}.html"  # Store the exact filename
         
         # Create paths
         sites_path = Path("assets/sites")
@@ -1805,100 +1826,99 @@ def archive_website(url):
         # Save meta tags to .tags file
         tags_content = (
             f"URL: {url}\n"
+            f"Title: {soup.title.string.strip() if soup.title else 'No title'}\n"
+            f"Timestamp: {datetime.now().isoformat()}\n"
             f"Keywords: {keywords if keywords else 'No keywords found'}\n"
             f"Description: {description if description else 'No description found'}\n"
         )
         tags_path = save_path.with_suffix('.tags')
         tags_path.write_text(tags_content, encoding='utf-8')
 
-        return str(save_path.with_suffix('.html'))
+        return {
+            'html': f'<div class="archived-link">'
+                   f'<a href="{url}">{title}</a><br/>'
+                   f'<span class="archive-reference">'
+                   f'<a href="/assets/sites/{html_filename}">site archive [{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]</a>'
+                   f'</span>'
+                   f'</div>',
+            'markdown': f"[{title} - [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]](/assets/sites/{html_filename})"
+        }
 
     except Exception as e:
         print(f"Error archiving website: {e}")
         return None
 
-def render_links_section():
-    """Render the links section by reading directly from the sites directory."""
-    sites_path = Path("assets/sites")
-    links = []
-    
-    if sites_path.exists():
-        for file in sites_path.glob("*.html"):
-            try:
-                parts = file.stem.rsplit('-', 1)  # Split on last hyphen
-                if len(parts) >= 2:
-                    title = parts[0].replace('_', ' ')
-                    domain = parts[1]
-                    links.append(f'<a href="https://{domain}">{title}</a> - <a href="/assets/sites/{file.name}">local copy</a>')
-            except Exception as e:
-                print(f"Error processing link {file}: {e}")
-                continue
-
-    return HTMLResponse('<br>'.join(links))
-
 @app.get("/api/links")
 async def get_links():
     """API endpoint to get the links section."""
     sites_path = Path("assets/sites")
-    link_groups = {}  # Dictionary to group archives by domain
+    link_groups = {}
     
     if sites_path.exists():
-        for file in sites_path.glob("*.html"):
+        # First, filter for just HTML files
+        html_files = [f for f in sites_path.glob("*.html")]
+        
+        for file in html_files:
             try:
-                parts = file.stem.split('_', 4)
-                if len(parts) >= 5:
-                    timestamp = '_'.join(parts[:4])
-                    title_domain = parts[4]
+                filename = file.name
+                match = re.match(r'(\d{4}_\d{2}_\d{2}_\d{6})_([^-]+)-(.+?)\.html$', filename)
+                if match:
+                    timestamp, title, domain = match.groups()
+                    display_timestamp = datetime.strptime(timestamp, "%Y_%m_%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
                     
-                    title_parts = title_domain.rsplit('-', 1)
-                    if len(title_parts) >= 2:
-                        title = title_parts[0].replace('_', ' ')
-                        domain = title_parts[1]
-                        display_timestamp = datetime.strptime(timestamp, "%Y_%m_%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
-                        clean_title = title.split('_')[-1] if '_' in title else title
-                        
-                        # Create archive entry
-                        archive_entry = {
-                            'timestamp': display_timestamp,
-                            'filename': file.name
+                    if domain not in link_groups:
+                        link_groups[domain] = {
+                            'domain': domain,
+                            'archives': []
                         }
-                        
-                        # Group by domain
-                        if domain not in link_groups:
-                            link_groups[domain] = {
-                                'title': clean_title,
-                                'archives': []
-                            }
-                        link_groups[domain]['archives'].append(archive_entry)
-                        
-                        # Sort archives by timestamp (newest first)
-                        link_groups[domain]['archives'].sort(
-                            key=lambda x: x['timestamp'],
-                            reverse=True
-                        )
-                        
+                    
+                    link_groups[domain]['archives'].append({
+                        'timestamp': display_timestamp,
+                        'filename': filename
+                    })
+                    
+                    # Sort archives by timestamp (newest first)
+                    link_groups[domain]['archives'].sort(
+                        key=lambda x: x['timestamp'],
+                        reverse=True
+                    )
+            
             except Exception as e:
                 print(f"Error processing link {file}: {e}")
                 continue
 
-    # Generate HTML for each group
+    # Generate HTML output
     html_parts = []
-    for domain, data in link_groups.items():
-        archives_html = '\n'.join(
-            f'<span class="archive-reference">'
-            f'<a href="/assets/sites/{archive["filename"]}" target="_blank" rel="noopener noreferrer">site archive [{archive["timestamp"]}]</a>'
-            f'</span>'
-            for archive in data['archives']
-        )
+    
+    # Sort domains alphabetically
+    for domain in sorted(link_groups.keys()):
+        data = link_groups[domain]
+        # Add domain as header
+        html_parts.append(f'<div class="domain-group">')
+        html_parts.append(f'<h3>{domain}</h3>')
         
-        html_parts.append(
-            f'<div class="archived-link">'
-            f'<a href="https://{domain}" target="_blank" rel="noopener noreferrer">{data["title"]}</a>'
-            f'{archives_html}'
-            f'</div>'
-        )
+        # Add archives for this domain
+        for archive in data['archives']:
+            file_path = f"/assets/sites/{archive['filename']}"
+            html_parts.append(
+                f'<div class="archived-link">'
+                f'<span class="archive-reference">'
+                f'<a href="{file_path}" target="_blank">site archive [{archive["timestamp"]}]</a>'
+                f'</span>'
+                f'</div>'
+            )
+        html_parts.append('</div>')
 
-    return HTMLResponse(''.join(html_parts))
+    result = {
+        'html': '\n'.join(html_parts),
+        'markdown': '\n'.join([
+            f"[{data['domain']} - [{archive['timestamp']}]]({'/assets/sites/' + archive['filename']})" 
+            for data in link_groups.values() 
+            for archive in data['archives']
+        ])
+    }
+    
+    return result
 
 @app.get("/api/themes")
 async def get_themes():
@@ -2045,6 +2065,7 @@ def main():
     
     # Find available port
     port = find_free_port()
+    set_app_port(port)
     
     # Initialize notes file
     init_notes_file()
