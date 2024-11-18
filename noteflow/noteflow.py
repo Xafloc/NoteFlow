@@ -29,6 +29,9 @@ import signal
 from asyncio import get_event_loop
 from fastapi.responses import JSONResponse
 import psutil  # You might need to: pip install psutil
+import tempfile
+from urllib3.exceptions import HTTPError
+import logging
 
 APP_PORT = None
 
@@ -37,36 +40,132 @@ def set_app_port(port: int):
     global APP_PORT
     APP_PORT = port
     
+# Add this list near the top of your file
+IGNORED_DOMAINS = {
+    'metrics.',
+    'analytics.',
+    'prismstandard.org',
+    'outbrain.com',
+    'tapad.com',
+    'livefyre.com',
+    'trustx.org',
+    'tracking.',
+    'stats.',
+    'ads.',
+}
+
+def should_ignore_resource(url):
+    """Check if the resource URL should be ignored."""
+    try:
+        parsed = urlparse(url)
+        return any(ignored in parsed.netloc.lower() for ignored in IGNORED_DOMAINS)
+    except:
+        return False
+
 def saveFullHtmlPage(url, output_path, session=None):
     """Save a complete webpage with all assets."""
     try:
         if session is None:
             session = requests.Session()
+            
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        session.headers.update(headers)
         
         response = session.get(url)
         soup = BeautifulSoup(response.text, 'html.parser')
         base_url = urljoin(url, '/')
 
-        # Handle images (both regular URLs and base64)
-        for img in soup.find_all('img'):
-            src = img.get('src', '')
-            if src.startswith('data:'):
-                # Base64 images are already embedded, skip them
-                continue
-            
-            try:
-                img_url = urljoin(url, src)
-                img_response = session.get(img_url)
-                if img_response.ok:
-                    # Convert to base64
-                    img_type = img_response.headers.get('content-type', 'image/jpeg')
-                    img_data = base64.b64encode(img_response.content).decode('utf-8')
-                    img['src'] = f'data:{img_type};base64,{img_data}'
-            except Exception as e:
-                print(f"Error processing image {src}: {e}")
-                continue
+        # Handle all resources that need to be embedded
+        for tag, attrs in [
+            ('img', 'src'),
+            ('link', 'href'),
+            ('script', 'src'),
+            ('source', 'src'),
+            ('video', 'src'),
+            ('audio', 'src'),
+            ('picture', 'src'),
+        ]:
+            for element in soup.find_all(tag):
+                src = element.get(attrs, '')
+                if not src or src.startswith('data:'):
+                    continue
+                    
+                if should_ignore_resource(src):
+                    continue
+                
+                try:
+                    resource_url = urljoin(url, src)
+                    resource_response = session.get(resource_url, timeout=10)  # Add timeout
+                    if resource_response.ok:
+                        content_type = resource_response.headers.get('content-type', '')
+                        if not content_type:
+                            content_type = mimetypes.guess_type(src)[0] or 'application/octet-stream'
+                        resource_data = base64.b64encode(resource_response.content).decode('utf-8')
+                        element[attrs] = f'data:{content_type};base64,{resource_data}'
+                except Exception as e:
+                    if not should_ignore_resource(src):
+                        print(f"Error processing resource {src}: {e}")
+                    continue
 
-        # ... rest of the function handling other assets ...
+        # Handle CSS files and their resources
+        for style in soup.find_all('style') + soup.find_all('link', rel='stylesheet'):
+            if style.name == 'link':
+                href = style.get('href')
+                if not href or should_ignore_resource(href):
+                    continue
+                try:
+                    css_url = urljoin(url, href)
+                    css_response = session.get(css_url, timeout=10)
+                    if css_response.ok:
+                        css_content = css_response.text
+                    else:
+                        continue
+                except:
+                    continue
+            else:
+                css_content = style.string or ''
+
+            # Process CSS URLs
+            css_urls = re.findall(r'url\(["\']?([^)"\']+)["\']?\)', css_content)
+            for css_url in css_urls:
+                if css_url.startswith('data:') or should_ignore_resource(css_url):
+                    continue
+                try:
+                    resource_url = urljoin(url, css_url)
+                    resource_response = session.get(resource_url, timeout=10)
+                    if resource_response.ok:
+                        content_type = resource_response.headers.get('content-type', '')
+                        if not content_type:
+                            content_type = mimetypes.guess_type(css_url)[0] or 'application/octet-stream'
+                        resource_data = base64.b64encode(resource_response.content).decode('utf-8')
+                        css_content = css_content.replace(
+                            f'url({css_url})',
+                            f'url(data:{content_type};base64,{resource_data})'
+                        )
+                except Exception as e:
+                    if not should_ignore_resource(css_url):
+                        print(f"Error processing CSS resource {css_url}: {e}")
+
+            if style.name == 'link':
+                new_style = soup.new_tag('style')
+                new_style.string = css_content
+                style.replace_with(new_style)
+            else:
+                style.string = css_content
+
+        # Add meta charset
+        if not soup.find('meta', charset=True):
+            meta = soup.new_tag('meta')
+            meta['charset'] = 'utf-8'
+            soup.head.insert(0, meta)
+
+        # Add archive timestamp
+        timestamp_comment = soup.new_tag('div')
+        timestamp_comment['style'] = 'position:fixed;top:0;left:0;background:#fff;padding:5px;font-size:12px;'
+        timestamp_comment.string = f'Archived on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+        soup.body.insert(0, timestamp_comment)
 
         # Save the modified HTML
         with open(f"{output_path}.html", 'w', encoding='utf-8') as f:
@@ -1782,12 +1881,15 @@ def archive_website(url):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
+        # Extract domain from URL
+        domain = urlparse(url).netloc
+
         # Create timestamp
         timestamp = datetime.now().strftime("%Y_%m_%d_%H%M%S")
+        display_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Extract title for filename
         title = clean_title(soup.title.string.strip()) if soup.title else "Untitled"
-        domain = urlparse(url).netloc
         base_filename = f"{timestamp}_{title}-{domain}"
         html_filename = f"{base_filename}.html"  # Store the exact filename
         
@@ -1836,12 +1938,12 @@ def archive_website(url):
 
         return {
             'html': f'<div class="archived-link">'
-                   f'<a href="{url}">{title}</a><br/>'
+                   f'<a href="{url}">{domain}</a><br/>'
                    f'<span class="archive-reference">'
-                   f'<a href="/assets/sites/{html_filename}">site archive [{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}]</a>'
+                   f'<a href="/assets/sites/{html_filename}">site archive [{display_timestamp}]</a>'
                    f'</span>'
                    f'</div>',
-            'markdown': f"[{title} - [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]](/assets/sites/{html_filename})"
+            'markdown': f"[{domain} - [{display_timestamp}]](/assets/sites/{html_filename})"
         }
 
     except Exception as e:
