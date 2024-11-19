@@ -340,7 +340,7 @@ async def favicon():
     return RedirectResponse(url="/static/favicon.ico")
 
 # Enhanced regex to match "[ ] task", "- [ ] task", and sub-bullets like "  - [ ] task"
-checkbox_pattern = re.compile(r'^(\s*[-*+]? *\[)([xX ]?)(\] .+)')
+checkbox_pattern = re.compile(r'^(\s*-\s*(?:\*\*|\*|__)?\[)([ xX])(\](?:\*\*|\*|__)?.*)$')
 
 # Data model for new notes
 class Note(BaseModel):
@@ -379,10 +379,31 @@ def task_list_plugin(md):
                     token.attrSet('type', 'checkbox')
                     if state.src[pos] in 'xX':
                         token.attrSet('checked', 'true')
-                    # Assign checkbox_index to token
-                    checkbox_index = state.env.get('checkbox_index', 0)
-                    token.meta = {'checkbox_index': checkbox_index}
-                    state.env['checkbox_index'] = checkbox_index + 1  # Increment for next checkbox
+                    
+                    # Ensure we have an environment
+                    if not hasattr(state, 'env'):
+                        state.env = {}
+                    if 'checkbox_index' not in state.env:
+                        state.env['checkbox_index'] = 0
+                    if 'note_index' not in state.env:
+                        state.env['note_index'] = 0
+                    
+                    # Create unique ID for the checkbox
+                    checkbox_index = state.env['checkbox_index']
+                    note_index = state.env['note_index']
+                    task_id = f'task_{note_index}_{checkbox_index}'
+                    
+                    # Store in token metadata
+                    token.meta = {
+                        'checkbox_index': checkbox_index,
+                        'task_id': task_id
+                    }
+                    
+                    # Set both id and name attributes directly on token
+                    token.attrSet('id', task_id)
+                    token.attrSet('name', task_id)
+                    
+                    state.env['checkbox_index'] = checkbox_index + 1
                     state.pos += 3
                 return True
         return False
@@ -390,20 +411,13 @@ def task_list_plugin(md):
     def render_checkbox(tokens, idx, options, env):
         token = tokens[idx]
         checked = 'checked' if token.attrGet('checked') == 'true' else ''
-        note_index = env.get('note_index', 0)
-        checkbox_index = token.meta['checkbox_index']
-        return f'<input type="checkbox" {checked} data-note-index="{note_index}" data-checkbox-index="{checkbox_index}">'
+        checkbox_index = token.meta.get('checkbox_index', 0)
+        task_id = token.meta.get('task_id', f'task_0_{checkbox_index}')
+        
+        # Always include id and name, with fallback values if needed
+        return f'<input type="checkbox" {checked} data-checkbox-index="{checkbox_index}" id="{task_id}" name="{task_id}">'
 
-    md.inline.ruler.before('emphasis', 'task_list', task_list_rule)
-    md.renderer.rules['checkbox'] = render_checkbox
-
-    def render_checkbox(tokens, idx, options, env):
-        token = tokens[idx]
-        checked = 'checked' if token.attrGet('checked') == 'true' else ''
-        note_index = env.get('note_index', 0)
-        checkbox_index = token.meta['checkbox_index']
-        return f'<input type="checkbox" {checked} data-note-index="{note_index}" data-checkbox-index="{checkbox_index}">'
-
+    # Make sure we're registering both the rule and the renderer
     md.inline.ruler.before('emphasis', 'task_list', task_list_rule)
     md.renderer.rules['checkbox'] = render_checkbox
 
@@ -1282,23 +1296,42 @@ async def get_index():
                                 const checkboxIndex = checkbox.getAttribute('data-checkbox-index');
                                 const isChecked = checkbox.checked;
                                 
-                                if (checkboxIndex !== null) {
-                                    try {
-                                        const response = await fetch('/api/update-checkbox', {
-                                            method: 'PATCH',
-                                            headers: { 'Content-Type': 'application/json' },
-                                            body: JSON.stringify({
-                                                checked: isChecked,
-                                                checkbox_index: parseInt(checkboxIndex)
-                                            })
-                                        });
-                                        
+                                // Validate checkbox index
+                                if (!checkboxIndex || isNaN(parseInt(checkboxIndex))) {
+                                    console.error('Invalid checkbox index:', checkboxIndex);
+                                    checkbox.checked = !isChecked; // Revert the checkbox
+                                    return;
+                                }
+                                
+                                const payload = {
+                                    checked: isChecked,
+                                    checkbox_index: parseInt(checkboxIndex)
+                                };
+                                
+                                try {
+                                    const response = await fetch('/api/update-checkbox', {
+                                        method: 'PATCH',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify(payload)
+                                    });
+                                    
+                                    if (!response.ok) {
+                                        const errorData = await response.json();
+                                        console.error('Server error:', errorData);
+                                        throw new Error(`Failed to update checkbox`);
+                                    }
+                                    
+                                    const result = await response.json();
+                                    if (result.status === 'success') {
                                         await loadNotes();
                                         await updateActiveTasks();
-                                        
-                                    } catch (error) {
-                                        console.error('Error updating checkbox:', error);
+                                    } else {
+                                        checkbox.checked = !isChecked;
+                                        console.error('Failed to update checkbox:', result.message);
                                     }
+                                } catch (error) {
+                                    checkbox.checked = !isChecked;
+                                    console.error('Error updating checkbox:', error);
                                 }
                             }
                         });
@@ -1309,33 +1342,37 @@ async def get_index():
                             const parser = new DOMParser();
                             const doc = parser.parseFromString(await response.text(), 'text/html');
                             
-                            // Select all checkboxes that are unchecked across different formats
                             const uncheckedTasks = Array.from(doc.querySelectorAll('input[type="checkbox"]:not(:checked)'));
                             
-                            tasksContainer.innerHTML = ''; // Clear existing tasks
+                            tasksContainer.innerHTML = '';
                             
                             uncheckedTasks.forEach((checkbox) => {
-                            const originalCheckboxIndex = checkbox.getAttribute('data-checkbox-index');
-                            const taskItem = checkbox.closest('li') || checkbox.closest('p'); // Support bullets and inline tasks
+                                const originalCheckboxIndex = checkbox.getAttribute('data-checkbox-index');
+                                const originalTaskId = checkbox.getAttribute('id') || `task_0_${originalCheckboxIndex}`;
+                                const activeTaskId = `active_${originalTaskId}`;
+                                const taskItem = checkbox.closest('li') || checkbox.closest('p');
 
-                            if (taskItem) {
-                                const taskText = taskItem.textContent.trim();
-                                
-                                const taskElement = document.createElement('div');
-                                taskElement.className = 'task-item';
-                                taskElement.innerHTML = `
-                                    <input type="checkbox" 
-                                        class="mt-1 consolidated-task" 
-                                        data-checkbox-index="${originalCheckboxIndex}">
-                                    <span class="task-text text-sm text-gray-700">${taskText}</span>
-                                `;
-                                tasksContainer.appendChild(taskElement);
+                                if (taskItem) {
+                                    const taskText = taskItem.textContent.trim();
+                                    
+                                    const taskElement = document.createElement('div');
+                                    taskElement.className = 'task-item';
+                                    taskElement.innerHTML = `
+                                        <input type="checkbox" 
+                                            class="mt-1 consolidated-task" 
+                                            data-checkbox-index="${originalCheckboxIndex}"
+                                            id="${activeTaskId}"
+                                            name="${activeTaskId}"
+                                            data-original-task="${originalTaskId}">
+                                        <span class="task-text text-sm text-gray-700">${taskText}</span>
+                                    `;
+                                    tasksContainer.appendChild(taskElement);
+                                }
+                            });
+
+                            if (uncheckedTasks.length === 0) {
+                                tasksContainer.innerHTML = '<div class="text-sm text-gray-500">No active tasks</div>';
                             }
-                    });
-
-                    if (uncheckedTasks.length === 0) {
-                        tasksContainer.innerHTML = '<div class="text-sm text-gray-500">No active tasks</div>';
-                    }
                         }
 
                         document.addEventListener('DOMContentLoaded', updateActiveTasks);
@@ -1580,7 +1617,16 @@ Start Links with + to archive websites (e.g., +https://www.google.com)
 @app.get("/api/notes")
 async def get_notes():
     notes_file = init_notes_file()
-    content = notes_file.read_text()
+    try:
+        # First try UTF-8
+        content = notes_file.read_text(encoding='utf-8')
+    except UnicodeDecodeError:
+        try:
+            # If UTF-8 fails, try Windows-1252 (cp1252)
+            content = notes_file.read_text(encoding='cp1252')
+        except UnicodeDecodeError:
+            # If both fail, use UTF-8 with error handling
+            content = notes_file.read_text(encoding='utf-8', errors='replace')
     
     notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
     
@@ -1592,7 +1638,10 @@ async def get_notes():
         timestamp = lines[0]
         note_content = '\n'.join(lines[1:])
         
-        env = {'note_index': note_index, 'checkbox_index': global_checkbox_index}
+        env = {
+            'note_index': note_index, 
+            'checkbox_index': global_checkbox_index
+        }
         
         rendered_content = render_markdown(note_content, env)
         
@@ -1647,7 +1696,14 @@ async def get_note(note_index: int):
 @app.put("/api/notes/{note_index}")
 async def update_note(note_index: int, note: Note):
     notes_file = init_notes_file()
-    content = notes_file.read_text()
+    try:
+        content = notes_file.read_text(encoding='utf-8')
+    except UnicodeDecodeError:
+        try:
+            content = notes_file.read_text(encoding='cp1252')
+        except UnicodeDecodeError:
+            content = notes_file.read_text(encoding='utf-8', errors='replace')
+
     notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
     
     if 0 <= note_index < len(notes):
@@ -1767,31 +1823,34 @@ class UpdateNoteRequest(BaseModel):
 @app.patch("/api/update-checkbox")
 async def update_checkbox(request: UpdateNoteRequest):
     notes_file = init_notes_file()
-    content = notes_file.read_text()
+    try:
+        content = notes_file.read_text(encoding='utf-8')
+    except UnicodeDecodeError:
+        try:
+            content = notes_file.read_text(encoding='cp1252')
+        except UnicodeDecodeError:
+            content = notes_file.read_text(encoding='utf-8', errors='replace')
+
     notes = [note.strip() for note in content.split("---") if note.strip()]
     
     checkbox_index = request.checkbox_index
     current_index = 0  # Global index to track checkbox positions
     
-    # Try to update the checkbox
     for note_index, note in enumerate(notes):
         lines = note.split('\n')
+        
         for i, line in enumerate(lines):
             match = checkbox_pattern.match(line)
             if match:
                 if current_index == checkbox_index:
-                    # Replace only the checkbox state
                     checked_char = 'x' if request.checked else ' '
-                    new_line = f"{match.group(1)}{checked_char}{match.group(3)}"
-                    lines[i] = new_line
-                    # Update the note and write back to the file
-                    notes[note_index] = '\n'.join(lines)
-                    updated_content = "\n---\n".join(notes)
-                    notes_file.write_text(updated_content)
+                    lines[i] = f"{match.group(1)}{checked_char}{match.group(3)}"
+                    notes[note_index] = "\n".join(lines)
+                    notes_file.write_text("\n---\n".join(notes))
                     return {"status": "success"}
                 current_index += 1
     
-    return {"status": "success"}
+    return {"status": "error", "message": f"Checkbox not found (index {checkbox_index}, checked {current_index} boxes)"}
 
 @app.post("/api/upload-file")
 async def upload_file(file: UploadFile = File(...)):
@@ -1826,7 +1885,7 @@ async def upload_file(file: UploadFile = File(...)):
 
 def render_markdown(content, env):
     md = MarkdownIt()
-    task_list_plugin(md)
+    md.use(task_list_plugin)  # Make sure this is properly initialized
     
     # Add custom image renderer
     def render_image(tokens, idx, options, env):
@@ -1858,7 +1917,18 @@ def render_markdown(content, env):
                 f'class="file-link">📎 {filename}</a>'
             )
     
+    def render_checkbox(tokens, idx, options, env):
+        token = tokens[idx]
+        checked = 'checked' if token.attrGet('checked') == 'true' else ''
+        checkbox_index = token.meta.get('checkbox_index', 0)
+        task_id = token.meta.get('task_id', f'task_0_{checkbox_index}')
+        
+        # Always include id and name, with fallback values if needed
+        return f'<input type="checkbox" {checked} data-checkbox-index="{checkbox_index}" id="{task_id}" name="{task_id}">'
+
+    
     md.renderer.rules['image'] = render_image
+    md.renderer.rules['checkbox'] = render_checkbox
     return md.render(content, env)
 
 def clean_title(title):
@@ -2177,7 +2247,7 @@ def main():
     
     # Configure logging to suppress access logs
     log_config = uvicorn.config.LOGGING_CONFIG
-    log_config["loggers"]["uvicorn.access"]["level"] = "WARNING"
+    log_config["loggers"]["uvicorn.access"]["level"] = "DEBUG"
     
     # Start server with modified logging
     uvicorn.run(
