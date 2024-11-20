@@ -244,12 +244,20 @@ THEMES = {
         'admin_button_text': '#ff8c00',
         'admin_label_border': '#000000',
         'admin_border': '#000000',
+
+        # Table colors for light theme
+        'table_border': '#e0e0e0',
+        'table_header_bg': '#f5f5f5',
+        'table_header_text': '#333333',
+        'table_row_bg': '#ffffff',
+        'table_row_alt_bg': '#f9f9f9',
+        'table_cell_text': '#333333',
     },
     'dark-blue': {
         # Main colors
         'background': '#1e3c72',          # Main background color
         'accent': '#ff8c00',              # Accent color
-        'text_color': '#757575',          # Global text color
+        'text_color': '#c0c0c0',          # Global text color
         'link_color': '#4a90e2',          # Link color
         'visited_link_color': '#7c7c9c',  # Visited link color
         'hover_link_color': '#66b3ff',    # Hovered link color
@@ -285,12 +293,20 @@ THEMES = {
         'admin_button_text': '#ff8c00',
         'admin_label_border': '#000000',
         'admin_border': '#000000',
+
+        # New table-specific colors
+        'table_border': '#404040',        # Table and cell borders
+        'table_header_bg': '#26292c',     # Table header background
+        'table_header_text': '#df8a3e',   # Table header text color
+        'table_row_bg': '#313437',        # Default row background
+        'table_row_alt_bg': '#26292c',    # Alternating row background
+        'table_cell_text': '#c0c0c0',     # Table cell text color
     },
     'dark-orange': {
         # Main colors
         'background': '#313437',          # Main background color
         'accent': '#df8a3e',              # Accent color
-        'text_color': '#757575',          # Global text color
+        'text_color': '#c0c0c0',          # Global text color
         'link_color': '#66d9ff',          # Link color
         'visited_link_color': '#8c8c8c',  # Visited link color
         'hover_link_color': '#00bfff',    # Hovered link color
@@ -326,6 +342,14 @@ THEMES = {
         'admin_button_text': '#ff8c00',
         'admin_label_border': '#000000',
         'admin_border': '#000000',
+
+        # New table-specific colors
+        'table_border': '#404040',        # Table and cell borders
+        'table_header_bg': '#26292c',     # Table header background
+        'table_header_text': '#df8a3e',   # Table header text color
+        'table_row_bg': '#313437',        # Default row background
+        'table_row_alt_bg': '#26292c',    # Alternating row background
+        'table_cell_text': '#c0c0c0',     # Table cell text color
     }
 }
 
@@ -766,6 +790,44 @@ async def get_index():
             color: {colors['hover_link_color']} !important;
             text-decoration: underline;
         }}
+        /* Table styles */
+        .markdown-body table {{
+            border-collapse: collapse;
+            width: 100%;
+            margin: 1em 0;
+            border: 1px solid {colors['table_border']};
+        }}
+
+        .markdown-body table thead {{
+            background-color: {colors['table_header_bg']};
+        }}
+
+        .markdown-body table th {{
+            padding: 8px 12px;
+            border: 1px solid {colors['table_border']};
+            color: {colors['table_header_text']};
+            font-weight: 600;
+            text-align: left;
+        }}
+
+        .markdown-body table td {{
+            padding: 8px 12px;
+            border: 1px solid {colors['table_border']};
+            color: {colors['table_cell_text']};
+        }}
+
+        .markdown-body table tr {{
+            background-color: {colors['table_row_bg']};
+        }}
+
+        .markdown-body table tr:nth-child(even) {{
+            background-color: {colors['table_row_alt_bg']};
+        }}
+
+        /* Optional hover effect */
+        .markdown-body table tr:hover {{
+            background-color: {colors['button_hover']};
+        }}
         .notes-container {{
             width: 100%;
             margin-left: 15px;
@@ -831,6 +893,15 @@ async def get_index():
             display: block;
             overflow-x: auto;
             font-size: 0.75rem;
+        }}
+        /* Inline code styling */
+        .markdown-body code {{
+            background-color: {colors['code_background']};
+            padding: 0.2em 0.4em;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 0.85em;
+            color: #333;  /* You might want to make this a theme color */
         }}
         .input-box input[type="text"] {{
             width: 100%;
@@ -1674,7 +1745,7 @@ async def get_notes():
 async def get_note(note_index: int):
     notes_file = init_notes_file()
     content = notes_file.read_text()
-    notes = [note.strip() for note in content.split("---") if note.strip()]
+    notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
     
     if 0 <= note_index < len(notes):
         lines = notes[note_index].split('\n')
@@ -1717,7 +1788,7 @@ async def update_note(note_index: int, note: Note):
         notes[note_index] = formatted_note
         
         # Join all notes back together with consistent separator
-        updated_content = f"\n{NOTE_SEPARATOR}\n".join(notes)
+        updated_content = f"\n---\n".join(notes)
         
         # Write back to file
         notes_file.write_text(updated_content)
@@ -1738,7 +1809,7 @@ async def delete_note(note_index: int):
         notes.pop(note_index)
         
         # Join remaining notes back together with consistent separator
-        updated_content = f"\n{NOTE_SEPARATOR}\n".join(notes)
+        updated_content = f"\n---\n".join(notes)
         
         # Write back to file
         with notes_file.open('w') as f:
@@ -1806,7 +1877,7 @@ async def add_note(note: Note):
     
     # Combine with existing content
     if current_content:
-        new_content = f"{formatted_note}\n{NOTE_SEPARATOR}\n{current_content}"
+        new_content = f"{formatted_note}\n---\n{current_content}"
     else:
         new_content = formatted_note
     
@@ -1831,13 +1902,15 @@ async def update_checkbox(request: UpdateNoteRequest):
         except UnicodeDecodeError:
             content = notes_file.read_text(encoding='utf-8', errors='replace')
 
-    notes = [note.strip() for note in content.split("---") if note.strip()]
+    # Use the consistent NOTE_SEPARATOR
+    notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
     
     checkbox_index = request.checkbox_index
     current_index = 0  # Global index to track checkbox positions
     
     for note_index, note in enumerate(notes):
         lines = note.split('\n')
+        modified = False
         
         for i, line in enumerate(lines):
             match = checkbox_pattern.match(line)
@@ -1845,10 +1918,16 @@ async def update_checkbox(request: UpdateNoteRequest):
                 if current_index == checkbox_index:
                     checked_char = 'x' if request.checked else ' '
                     lines[i] = f"{match.group(1)}{checked_char}{match.group(3)}"
-                    notes[note_index] = "\n".join(lines)
-                    notes_file.write_text("\n---\n".join(notes))
-                    return {"status": "success"}
+                    modified = True
+                    break
                 current_index += 1
+        
+        if modified:
+            notes[note_index] = '\n'.join(lines)
+            # Join notes with the consistent separator
+            updated_content = NOTE_SEPARATOR.join(notes)
+            notes_file.write_text(updated_content)
+            return {"status": "success"}
     
     return {"status": "error", "message": f"Checkbox not found (index {checkbox_index}, checked {current_index} boxes)"}
 
@@ -1884,8 +1963,24 @@ async def upload_file(file: UploadFile = File(...)):
     }
 
 def render_markdown(content, env):
-    md = MarkdownIt()
-    md.use(task_list_plugin)  # Make sure this is properly initialized
+    # Initialize markdown-it with zero preset and enable needed features
+    md = MarkdownIt('zero')
+    md.enable('table')        # Enable tables
+    md.enable('emphasis')     # Enable bold/italic
+    md.enable('link')        # Enable links
+    md.enable('paragraph')   # Enable paragraphs
+    md.enable('heading')     # Enable headings
+    md.enable('list')        # Enable lists
+    md.enable('image')       # Enable images
+    md.enable('code')        # Enable code blocks
+    md.enable('fence')       # Enable fenced code blocks
+    md.enable('blockquote')  # Enable blockquotes
+    md.enable('strikethrough')    # ~~strikethrough text~~
+    md.enable('escape')          # Backslash escapes
+    md.enable('backticks')    # Extended backtick features
+    md.enable('inline')       # Enable inline-level rules
+    
+    md.use(task_list_plugin)  # Add our custom task list plugin
     
     # Add custom image renderer
     def render_image(tokens, idx, options, env):
@@ -2185,27 +2280,39 @@ async def shutdown():
             for child in children:
                 try:
                     child.terminate()
+                    time.sleep(0.1)  # Give it a moment to terminate
+                    if child.is_running():
+                        child.kill()  # Force kill if still running
                 except:
                     pass
             
-            # Try multiple shutdown approaches
-            try:
-                if platform.system() == 'Windows':
-                    os.kill(pid, signal.CTRL_C_EVENT)
-                else:
-                    # Try different signals on Unix systems
+            # Try different shutdown approaches based on platform
+            if platform.system() == 'Windows':
+                os.kill(pid, signal.CTRL_C_EVENT)
+            else:
+                # macOS/Linux specific handling
+                try:
+                    # Try SIGTERM first
                     os.kill(pid, signal.SIGTERM)
-                    os.kill(pid, signal.SIGINT)
-            except:
-                # If signals fail, force kill the process
-                process.kill()
+                    time.sleep(0.5)  # Give it time to terminate gracefully
+                    
+                    # If still running, try SIGINT
+                    if psutil.pid_exists(pid):
+                        os.kill(pid, signal.SIGINT)
+                        time.sleep(0.5)
+                    
+                    # If still running, force kill
+                    if psutil.pid_exists(pid):
+                        process.kill()
+                except:
+                    # Last resort: force kill
+                    process.kill()
             
         except Exception as e:
-            print(f"Shutdown error: {e}")
-            # Last resort: force exit
-            sys.exit(0)
+            # Force exit if all else fails
+            os._exit(0)
     
-    # Schedule the shutdown
+    # Schedule the shutdown with a slight delay
     from asyncio import get_event_loop
     loop = get_event_loop()
     loop.call_later(0.5, shutdown_server)
