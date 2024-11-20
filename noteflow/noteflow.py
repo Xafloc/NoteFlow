@@ -891,6 +891,23 @@ async def get_index():
             overflow-x: auto;
             font-size: 0.75rem;
         }}
+        .markdown-body blockquote.markdown-blockquote {{
+            border-left: 4px solid {colors['accent']};
+            margin: 1em 0;
+            padding: 0.5em 1em;
+            color: {colors['text_color']};
+            background-color: {colors['table_row_bg']};  # Changed to use table row background color
+            border-radius: 4px;  # Optional: add slight rounding to match other elements
+        }}
+
+        .markdown-body blockquote.markdown-blockquote p {{
+            margin: 0;
+            white-space: pre-wrap;
+            font-family: 'space_monoregular', monospace;
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }}
+
         .notes-item pre code {{
             background-color: {colors['code_background']};
             padding: 0.3em;
@@ -2025,7 +2042,16 @@ def render_markdown(content, env):
         
         # Always include id and name, with fallback values if needed
         return f'<input type="checkbox" {checked} data-checkbox-index="{checkbox_index}" id="{task_id}" name="{task_id}">'
-
+    
+    def render_blockquote_open(tokens, idx, options, env):
+        return '<blockquote class="markdown-blockquote">'
+    
+    def render_blockquote_close(tokens, idx, options, env):
+        return '</blockquote>'
+    
+    # Replace the existing blockquote renderer with separate open/close renderers
+    md.renderer.rules['blockquote_open'] = render_blockquote_open
+    md.renderer.rules['blockquote_close'] = render_blockquote_close
     
     md.renderer.rules['image'] = render_image
     md.renderer.rules['checkbox'] = render_checkbox
