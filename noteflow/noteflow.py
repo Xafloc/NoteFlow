@@ -450,7 +450,12 @@ def task_list_plugin(md):
 async def get_index():
     # Get colors for current theme
     colors = THEMES[CURRENT_THEME]
-    
+
+    # Get current directory name
+    current_dir = Path.cwd().name
+    # Create dynamic title
+    page_title = f"NoteFlow - {current_dir}"  # or f"{current_dir} - NoteFlow" if you prefer
+
     themed_styles = f"""
     <style>
         @font-face {{
@@ -1626,11 +1631,11 @@ Start Links with + to archive websites (e.g., +https://www.google.com)
 
     return f"""
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en">s
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Notes</title>
+    <title>{page_title}</title>
         {themed_styles}
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/{colors['code_style']}.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
