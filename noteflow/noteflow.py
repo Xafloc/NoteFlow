@@ -864,6 +864,12 @@ async def get_index():
             word-break: break-word;
             white-space: pre-wrap;
             font-size: 0.7rem;
+            color: {colors['text_color']} !important;
+            text-decoration: none;
+        }}
+        #activeTasks .task-text:hover {{
+            color: {colors['accent']} !important;
+            text-decoration: underline;
         }}
         #noteForm button {{
             width: 100px;
@@ -1457,7 +1463,7 @@ async def get_index():
                                             id="${activeTaskId}"
                                             name="${activeTaskId}"
                                             data-original-task="${originalTaskId}">
-                                        <span class="task-text text-sm text-gray-700">${taskText}</span>
+                                            <a href="#${originalTaskId}" class="task-text text-sm text-gray-700">${taskText}</a>
                                     `;
                                     tasksContainer.appendChild(taskElement);
                                 }
