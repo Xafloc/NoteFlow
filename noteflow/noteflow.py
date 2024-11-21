@@ -175,9 +175,8 @@ def saveFullHtmlPage(url, output_path, session=None):
         print(f"Error saving webpage: {e}")
         raise
 
-def create_directories():
-    # Define the directories to be created relative to the current working directory
-    base_path = Path.cwd()
+def create_directories(base_path: Path):
+    """Create necessary directories relative to the given base path"""
     directories = [
         base_path / "assets",
         base_path / "assets/images",
@@ -189,15 +188,16 @@ def create_directories():
     for directory in directories:
         os.makedirs(directory, exist_ok=True)
 
-# Ensure directories are created before mounting
-create_directories()
-
 app = FastAPI()
 
-# Mount the local directories
+# Mount static and fonts from the package directory
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 app.mount("/fonts", StaticFiles(directory=Path(__file__).parent / "fonts"), name="fonts")
-app.mount("/assets", StaticFiles(directory=Path.cwd() / "assets"), name="assets")  # Use Path.cwd() to ensure correct path
+
+# Create a function to mount assets directory dynamically
+def mount_assets_directory(app: FastAPI, base_path: Path):
+    """Mount the assets directory for the given base path"""
+    app.mount("/assets", StaticFiles(directory=base_path / "assets"), name="assets")
 
 # Define the new separator
 NOTE_SEPARATOR = "\n---\n"
@@ -1654,7 +1654,7 @@ Start Links with + to archive websites (e.g., +https://www.google.com)
 
     return f"""
 <!DOCTYPE html>
-<html lang="en">s
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -2216,7 +2216,7 @@ async def get_links():
     result = {
         'html': '\n'.join(html_parts),
         'markdown': '\n'.join([
-            f"[{data['domain']} - [{archive['timestamp']}]]({'/assets/sites/' + archive['filename']})" 
+            f"[{data['domain']} - [{archive['timestamp']}]({'/assets/sites/' + archive['filename']})" 
             for data in link_groups.values() 
             for archive in data['archives']
         ])
@@ -2374,34 +2374,69 @@ def open_browser(url):
     except webbrowser.Error as e:
         print(f"Could not open browser: {e}. Please open manually.")
 
+# Add this function to handle folder path validation and creation
+def validate_folder_path(folder_path: str | None = None) -> Path:
+    """
+    Validate and return the folder path to use for notes.md
+    If no path provided, uses current working directory
+    """
+    if folder_path:
+        path = Path(folder_path).resolve()
+        # Create folder if it doesn't exist
+        path.mkdir(parents=True, exist_ok=True)
+        # Change working directory to this path
+        os.chdir(path)
+    else:
+        # Use current working directory
+        path = Path.cwd()
+    
+    return path
+
+# Modify the main() function
 def main():
     print("Running noteflow...")
-    # Get current directory name
-    current_dir = Path.cwd().name
     
-    # Find available port
-    port = find_free_port()
-    set_app_port(port)
+    # Get folder path from command line args if provided
+    folder_path = sys.argv[1] if len(sys.argv) > 1 else None
     
-    # Initialize notes file
-    init_notes_file()
-    
-    # Open web browser before starting server
-    open_browser(f'http://localhost:{port}')
-    
-    # Configure logging to suppress access logs
-    log_config = uvicorn.config.LOGGING_CONFIG
-    log_config["loggers"]["uvicorn.access"]["level"] = "DEBUG"
-    
-    # Start server with modified logging
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=port, 
-        log_level="debug",
-        log_config=log_config,
-        access_log=False
-    )
+    try:
+        # Validate and set working directory
+        working_dir = validate_folder_path(folder_path)
+        print(f"Using folder: {working_dir}")
+        
+        # Create necessary directories in the working directory
+        create_directories(working_dir)
+        mount_assets_directory(app, working_dir)
+        
+        # Get current directory name for title
+        current_dir = working_dir.name
+        
+        # Find available port
+        port = find_free_port()
+        set_app_port(port)
+        
+        # Initialize notes file
+        init_notes_file()
+        
+        # Open web browser before starting server
+        open_browser(f'http://localhost:{port}')
+        
+        # Configure logging to suppress access logs
+        log_config = uvicorn.config.LOGGING_CONFIG
+        log_config["loggers"]["uvicorn.access"]["level"] = "DEBUG"
+        
+        # Start server with modified logging
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=port, 
+            log_level="debug",
+            log_config=log_config,
+            access_log=False
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

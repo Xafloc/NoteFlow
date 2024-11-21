@@ -16,7 +16,7 @@ NoteFlow is a lightweight, Markdown-based note-taking application with task mana
 
 ## Features
 
-- **📝 Continuous Flow**: All notes stream into a single Markdown file, creating a natural timeline
+- **📝 One Big Markdown File**: All notes stream into a single Markdown file, creating a natural timeline
 - **✅ Active Tasks Tracking**: Active tasks automatically surface to a dedicated panel
 - **🔍 Pure Markdown**: Write in plain Markdown and use checkboxes for task management
 - **💾 Zero Database**: Your entire note history lives in one portable Markdown file
@@ -32,28 +32,47 @@ NoteFlow is a lightweight, Markdown-based note-taking application with task mana
 
 To quickly get started with Noteflow, follow these steps:
 
-1. **Install Noteflow**: Use pip to install the package:
+### Installation Options
 
-   ```bash
-   pip install noteflow
-   ```
+#### Using pip (All Platforms)
+```bash
+pip install noteflow
+```
 
-2. **Install Noteflow**: Use Homebrew to install the package:
+#### Using Homebrew (macOS/Linux)
+```bash
+brew tap Xafloc/noteflow
+brew install noteflow
+```
 
-   ```bash
-   brew tap Xafloc/noteflow
-   brew install noteflow
-   ```
+### Running Noteflow
 
-3. **Run Noteflow**: After installation, you can run Noteflow using the command line from any folder you'd like to take notes in:
+You can run Noteflow in several ways:
 
-   ```bash
-   noteflow
-   ```
+#### From Current Directory
+```bash
+noteflow
+```
 
-4. **Access the Application**: Your web browser should open automatically, else open your web browser and navigate to `http://localhost:8000` to start using Noteflow.
+#### Specify a Notes Directory
+```bash
+# Linux/macOS
+noteflow /path/to/notes/folder
 
-That's it! You're now ready to start using Noteflow for your note-taking needs.
+# Windows
+noteflow C:\path\to\notes\folder
+```
+
+#### Run Multiple Instances
+You can run multiple instances by specifying different ports:
+```bash
+noteflow --port 8000  # First instance
+noteflow --port 8001  # Second instance
+```
+
+4. **Access the Application**: Your web browser should open automatically. If not, open your browser and navigate to:
+   - Default instance: `http://localhost:8000`
+   - Additional instance ports: `http://localhost:<port>`
 
 ## Requirements
 
@@ -97,6 +116,9 @@ NoteFlow supports standard Markdown syntax including:
 - Checkboxes
 - Bold/Italic text
 - Code blocks
+- Strickthrough
+- Tables
+- Blockquotes
 - And more!
 
 ## File Structure
