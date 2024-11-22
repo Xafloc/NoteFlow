@@ -13,6 +13,8 @@ NoteFlow is a lightweight, Markdown-based note-taking application with task mana
 ![Point in Time Site Copy/Bookmark](/screenshot_4.png)
 #### Multiple Themes:
 ![Multiple Themes](/screenshot_5.png)
+#### Math Rendering:
+![Math Rendering](/screenshot_6.png)
 
 ## Features
 
@@ -80,6 +82,7 @@ noteflow --port 8001  # Second instance
 - FastAPI
 - uvicorn
 - markdown-it-py
+- mdit-py-plugins
 - Other dependencies listed in `requirements.txt`
 
 ### Taking Notes
@@ -119,6 +122,7 @@ NoteFlow supports standard Markdown syntax including:
 - Strickthrough
 - Tables
 - Blockquotes
+- Math (using [MathJax](https://www.mathjax.org/))
 - And more!
 
 ## File Structure

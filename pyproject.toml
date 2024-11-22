@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "noteflow"
-version = "0.2.3"
+version = "0.2.4"
 authors = [
     { name="Xafloc", email="xafloc@tetrago.com" },
 ]
@@ -25,6 +25,7 @@ dependencies = [
     "fastapi>=0.104.1",
     "uvicorn>=0.24.0",
     "markdown-it-py>=3.0.0",
+    "mdit-py-plugins>=0.3.1",
     "python-multipart>=0.0.6",
     "pydantic>=2.4.2",
     "pathlib>=1.0.1",

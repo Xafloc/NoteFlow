@@ -14,6 +14,7 @@ from pathlib import Path
 import sys
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
+from mdit_py_plugins.dollarmath import dollarmath_plugin
 from typing import Optional
 from urllib.parse import quote, unquote, urljoin, urlparse
 import os
@@ -252,6 +253,9 @@ THEMES = {
         'table_row_bg': '#ffffff',
         'table_row_alt_bg': '#f9f9f9',
         'table_cell_text': '#333333',
+
+        # MathJax colors
+        'math_color': '#e65100',
     },
     'dark-blue': {
         # Main colors
@@ -301,6 +305,9 @@ THEMES = {
         'table_row_bg': '#313437',        # Default row background
         'table_row_alt_bg': '#26292c',    # Alternating row background
         'table_cell_text': '#c0c0c0',     # Table cell text color
+
+        # MathJax colors
+        'math_color': '#e65100',
     },
     'dark-orange': {
         # Main colors
@@ -350,6 +357,9 @@ THEMES = {
         'table_row_bg': '#313437',        # Default row background
         'table_row_alt_bg': '#26292c',    # Alternating row background
         'table_cell_text': '#c0c0c0',     # Table cell text color
+
+        # MathJax colors
+        'math_color': '#e65100',
     }
 }
 
@@ -1162,6 +1172,30 @@ async def get_index():
                 transform: translate(-100%, 0);
             }}
         }}
+
+        /* Add these CSS rules to your existing styles */
+        .math-inline {{
+            display: inline-block;
+            margin: 0.2em 0;  /* Reduced from default */
+            color: {colors['math_color']};
+        }}
+        .math-display {{
+            display: block;
+            text-align: left;  /* Changed from center to left */
+            margin: 0.5em 0;  /* Reduced from default */
+            color: {colors['math_color']};
+        }}
+        /* If needed, also add these MathJax-specific styles */
+        .MathJax {{
+            text-align: left !important;
+            margin: 0.2em 0 !important;
+            color: {colors['math_color']};
+        }}
+        .MathJax_Display {{
+            text-align: left !important;
+            margin: 0.5em 0 !important;
+            color: {colors['math_color']};
+        }}
     </style>
 """
 
@@ -1352,7 +1386,26 @@ async def get_index():
                         async function loadNotes() {
                             const response = await fetch('/api/notes');
                             const html = await response.text();
-                            document.getElementById('notes').innerHTML = html;
+                            const notesContainer = document.getElementById('notes');
+                            notesContainer.innerHTML = html;
+
+                            // Trigger MathJax to process new content
+                            // Wait for MathJax to be fully loaded
+                            if (!window.MathJax) {
+                                console.log('Waiting for MathJax to load...');
+                                await new Promise(resolve => {
+                                    const checkMathJax = setInterval(() => {
+                                        if (window.MathJax && window.MathJax.typesetPromise) {
+                                            clearInterval(checkMathJax);
+                                            resolve();
+                                        }
+                                    }, 100);
+                                });
+                            }
+                            // Now typeset the math using the correct container reference
+                            await typeset(notesContainer);  // Changed from notesElement to notesContainer
+
+                            // Highlight code blocks
                             document.querySelectorAll('pre code').forEach((block) => {
                                 hljs.highlightElement(block);
                             });
@@ -1708,7 +1761,33 @@ Start Links with + to archive websites (e.g., +https://www.google.com)
                 alert('Failed to delete note');
             }}
         }}
-        
+        window.MathJax = {{
+            tex: {{
+                inlineMath: [['$', '$']],
+                displayMath: [['$$', '$$']],
+                processEscapes: true
+            }},
+            startup: {{
+                pageReady: () => {{
+                    return MathJax.startup.defaultPageReady();
+                }}
+            }},
+            options: {{
+                skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+            }},
+            svg: {{
+                fontCache: 'global'
+            }}
+        }};
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+    <script>
+        function typeset(element) {{
+            if (window.MathJax && window.MathJax.typesetPromise) {{
+                return window.MathJax.typesetPromise([element]);
+            }}
+            return Promise.resolve();
+        }}
     </script>
 </head>
     """ + html_content
@@ -2008,7 +2087,26 @@ def render_markdown(content, env):
     md.enable('backticks')    # Extended backtick features
     md.enable('inline')       # Enable inline-level rules
     
+    # Add debug logging for math tokens
+    def debug_math_tokens(tokens):
+        for token in tokens:
+            if token.type in ['math_inline', 'math_block']:
+                print(f"Math token found: type={token.type}, content={token.content}")
+    
+    def render_math(tokens, idx, options, env):
+        token = tokens[idx]
+        content = token.content
+        is_block = token.type == 'math_block'
+        
+        if is_block:
+            return f'<div class="math-display">$${content}$$</div>'
+        else:
+            return f'<span class="math-inline">${content}$</span>'
+    
     md.use(task_list_plugin)  # Add our custom task list plugin
+    md.use(dollarmath_plugin)  # Add our custom dollarmath plugin
+    md.renderer.rules['math_inline'] = render_math
+    md.renderer.rules['math_block'] = render_math
     
     # Add custom image renderer
     def render_image(tokens, idx, options, env):
@@ -2061,6 +2159,9 @@ def render_markdown(content, env):
     
     md.renderer.rules['image'] = render_image
     md.renderer.rules['checkbox'] = render_checkbox
+    
+    tokens = md.parse(content, env)
+    # debug_math_tokens(tokens)
     return md.render(content, env)
 
 def clean_title(title):
