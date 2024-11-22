@@ -2374,8 +2374,7 @@ def open_browser(url):
     except webbrowser.Error as e:
         print(f"Could not open browser: {e}. Please open manually.")
 
-# Add this function to handle folder path validation and creation
-def validate_folder_path(folder_path: str | None = None) -> Path:
+def validate_folder_path(folder_path: Optional[str] = None) -> Path:
     """
     Validate and return the folder path to use for notes.md
     If no path provided, uses current working directory
