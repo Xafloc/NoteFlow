@@ -1,5 +1,7 @@
 # NoteFlow
 
+> **FORMAT CHANGE NOTICE**: As of version 0.3.0, the note separator has changed from `---` to `<!-- note -->`. Please update your notes.md file to use the new format.
+
 NoteFlow is a lightweight, Markdown-based note-taking application with task management capabilities. It provides a clean interface for creating, viewing, and managing notes with support for tasks, images, files,and code snippets.
 
 ## Features
@@ -66,10 +68,10 @@ noteflow C:\path\to\notes\folder
 ```
 
 #### Run Multiple Instances
-You can run multiple instances by specifying different ports:
+You can run multiple instances by specifying different directories:
 ```bash
-noteflow --port 8000  # First instance
-noteflow --port 8001  # Second instance
+noteflow /path/to/notes/folder1  # First instance
+noteflow /path/to/notes/folder2  # Second instance
 ```
 
 4. **Access the Application**: Your web browser should open automatically. If not, open your browser and navigate to:
@@ -119,7 +121,7 @@ NoteFlow supports standard Markdown syntax including:
 - Checkboxes
 - Bold/Italic text
 - Code blocks
-- Strickthrough
+- Strikethrough
 - Tables
 - Blockquotes
 - Math (using [MathJax](https://www.mathjax.org/))
@@ -127,14 +129,14 @@ NoteFlow supports standard Markdown syntax including:
 
 ## File Structure
 
-Your notes are stored in `notes.md` in your working directory. The file format is simple:
+Your notes are stored in `notes.md` in your working directory, or the passed path argument. The file format is simple:
 
 ```markdown
 ## 2024-10-30 12:34:56 - Optional Title
 
 Your note content here...
 
----
+<!-- note -->
 
 ## 2024-10-30 12:33:45
 
