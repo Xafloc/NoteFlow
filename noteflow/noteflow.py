@@ -2885,40 +2885,46 @@ async def get_page_title(url: str) -> str:
 ###############################################################################
 # Main Entry Point
 ###############################################################################
-if __name__ == "__main__":
+def main():
     import uvicorn
+    global note_manager
     
-    # Get and validate folder path
-    folder_path_input = sys.argv[1] if len(sys.argv) > 1 else None
-    working_dir = validate_folder_path(folder_path_input)
-    print(f"Using folder: {working_dir}")
+    try:
+        # Get and validate folder path
+        folder_path_input = sys.argv[1] if len(sys.argv) > 1 else None
+        working_dir = validate_folder_path(folder_path_input)
+        print(f"Using folder: {working_dir}")
 
-    # Create necessary directories
-    create_directories(working_dir)
-    mount_assets_directory(app, working_dir)
+        # Create necessary directories
+        create_directories(working_dir)
+        mount_assets_directory(app, working_dir)
 
-    # Initialize the note manager with the base path
-    note_manager = NoteManager(working_dir)
-    
-    # Store folder_path in app.state for access in routes and functions
-    app.state.folder_path = working_dir
+        # Initialize the note manager with the base path
+        note_manager = NoteManager(working_dir)
+        
+        # Store folder_path in app.state for access in routes and functions
+        app.state.folder_path = working_dir
 
-    # Find available port
-    port = find_free_port()
-    set_app_port(port)
-    
-    # Configure logging
-    log_config = uvicorn.config.LOGGING_CONFIG
-    log_config["loggers"]["uvicorn.access"]["level"] = "DEBUG"
-    
-    # Start server
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=port, 
-        log_level="debug",
-        log_config=log_config,
-        access_log=False
-    )
+        # Find available port
+        port = find_free_port()
+        set_app_port(port)
+        
+        # Configure logging
+        log_config = uvicorn.config.LOGGING_CONFIG
+        log_config["loggers"]["uvicorn.access"]["level"] = "DEBUG"
+        
+        # Start server
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=port, 
+            log_level="debug",
+            log_config=log_config,
+            access_log=False
+        )
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
-
+if __name__ == "__main__":
+    main()
