@@ -74,7 +74,9 @@ def _due_matches(due, spec: str) -> bool:
 # Saved views
 ###############################################################################
 def _views_path() -> Path:
-    p = Path(platformdirs.user_config_dir("noteflow")) / "task_views.json"
+    # Same Python-specific dir as the rest of the app — keeps us out of
+    # noteflow-go's config if both are installed.
+    p = Path(platformdirs.user_config_dir("noteflow-py")) / "task_views.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

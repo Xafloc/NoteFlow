@@ -202,7 +202,9 @@ THEMES = {
 
 def get_config_file():
     """Get the path to the config file, creating directories if needed."""
-    config_dir = Path(platformdirs.user_config_dir("noteflow"))
+    # Use a Python-specific dir name so we don't share config / DB with the
+    # Go rewrite (noteflow-go) if both are installed on the same machine.
+    config_dir = Path(platformdirs.user_config_dir("noteflow-py"))
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir / "noteflow.json"
 
