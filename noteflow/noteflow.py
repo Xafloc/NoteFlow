@@ -2769,7 +2769,10 @@ HTML_TEMPLATE = """
         }
         function highlight(text, query) {
             if (!query) return escapeHtml(text);
-            const escQ = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // Note: this string lives inside a Python triple-quoted block,
+            // so every backslash is doubled to survive Python's parser
+            // before JS sees the intended single-backslash regex escapes.
+            const escQ = query.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
             const re = new RegExp(escQ, 'gi');
             return escapeHtml(text).replace(re, (m) => '<mark>' + m + '</mark>');
         }
@@ -3002,7 +3005,7 @@ HTML_TEMPLATE = """
                     const {done, value} = await reader.read();
                     if (done) break;
                     buf += decoder.decode(value, {stream: true});
-                    const parts = buf.split('\n\n');
+                    const parts = buf.split('\\n\\n');
                     buf = parts.pop();
                     for (const part of parts) {
                         const trimmed = part.trim();
