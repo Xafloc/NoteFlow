@@ -217,24 +217,44 @@ def get_config_file():
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir / "noteflow.json"
 
+FONT_SCALE_SECTIONS = ("notes", "tasks", "links")
+FONT_SCALE_MIN = 0.8
+FONT_SCALE_MAX = 1.6
+
+def _default_font_scales():
+    return {s: 1.0 for s in FONT_SCALE_SECTIONS}
+
+def _clamp_font_scale(value) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(FONT_SCALE_MIN, min(FONT_SCALE_MAX, v))
+
 def load_config():
     """Load configuration from JSON file or create default if not exists."""
     config_file = get_config_file()
-    
+
     default_config = {
-        "theme": "dark-orange"
+        "theme": "dark-orange",
+        "font_scales": _default_font_scales(),
     }
-    
+
     try:
         if config_file.exists():
             with open(config_file, 'r') as f:
                 config = json.load(f)
-                if config.get('theme') not in THEMES:
-                    print(f"Warning: Theme '{config.get('theme')}' not found, defaulting to dark-orange")
-                    config['theme'] = default_config['theme']
-                    with open(config_file, 'w') as f:
-                        json.dump(config, f, indent=4)
-                return config
+            if config.get('theme') not in THEMES:
+                print(f"Warning: Theme '{config.get('theme')}' not found, defaulting to dark-orange")
+                config['theme'] = default_config['theme']
+            # Normalize font_scales — fill in missing sections, clamp values.
+            scales = config.get('font_scales') or {}
+            config['font_scales'] = {
+                s: _clamp_font_scale(scales.get(s, 1.0)) for s in FONT_SCALE_SECTIONS
+            }
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=4)
+            return config
         else:
             with open(config_file, 'w') as f:
                 json.dump(default_config, f, indent=4)
@@ -253,11 +273,64 @@ def save_config(config):
     except Exception as e:
         print(f"Error saving config: {e}")
         return False
-    
+
 config = load_config()
 CURRENT_THEME = config.get('theme', 'light-blue')
 if CURRENT_THEME not in THEMES:
     CURRENT_THEME = 'dark-orange'
+FONT_SCALES = config.get('font_scales') or _default_font_scales()
+
+def get_git_context(folder_path: Path) -> Dict:
+    """Read .git/HEAD directly to detect repo status without shelling out.
+
+    Returns {is_repo: bool, branch: str|None, sha: str|None}.
+    Supports both standard repos (.git is a dir) and worktrees (.git is a
+    file containing `gitdir: ...`).
+    """
+    result = {"is_repo": False, "branch": None, "sha": None}
+    try:
+        git_path = folder_path / ".git"
+        if not git_path.exists():
+            return result
+
+        if git_path.is_file():
+            # Worktree pointer file: "gitdir: /actual/path"
+            content = git_path.read_text(errors='replace').strip()
+            if content.startswith("gitdir:"):
+                git_dir = Path(content.split(":", 1)[1].strip())
+                if not git_dir.is_absolute():
+                    git_dir = (folder_path / git_dir).resolve()
+            else:
+                return result
+        else:
+            git_dir = git_path
+
+        head_file = git_dir / "HEAD"
+        if not head_file.exists():
+            return result
+
+        head = head_file.read_text(errors='replace').strip()
+        result["is_repo"] = True
+        if head.startswith("ref: "):
+            ref = head[5:].strip()
+            result["branch"] = ref.split("/")[-1] if "/" in ref else ref
+            ref_path = git_dir / ref
+            if ref_path.exists():
+                result["sha"] = ref_path.read_text(errors='replace').strip()[:7]
+            else:
+                # Packed-refs fallback
+                packed = git_dir / "packed-refs"
+                if packed.exists():
+                    for line in packed.read_text(errors='replace').splitlines():
+                        if line.endswith(" " + ref):
+                            result["sha"] = line.split(" ", 1)[0][:7]
+                            break
+        else:
+            # Detached HEAD — content is the raw SHA.
+            result["sha"] = head[:7] if head else None
+    except Exception as e:
+        print(f"Git context probe failed: {e}")
+    return result
 
 ###############################################################################
 # Core Classes
@@ -954,17 +1027,19 @@ def inline_all_resources(url, source_html):
 async def root(request: Request):
     """Render the main page"""
     colors = THEMES[CURRENT_THEME]
-    
-    # Retrieve folder_path from app.state
+
     folder_path = request.app.state.folder_path
-    
-    # First replace theme styles
-    html = HTML_TEMPLATE.replace(
+
+    rendered = HTML_TEMPLATE.replace(
         "<!-- THEME_STYLES -->",
         THEMED_STYLES.format(colors=colors)
     )
-    # Then safely format folder path
-    return html.replace(
+    font_vars = "; ".join(
+        f"--font-scale-{section}: {FONT_SCALES.get(section, 1.0)}"
+        for section in FONT_SCALE_SECTIONS
+    ) + ";"
+    rendered = rendered.replace("<!-- FONT_SCALE_VARS -->", font_vars)
+    return rendered.replace(
         "{folder_path}",
         str(folder_path) if folder_path else ""
     )
@@ -1351,6 +1426,72 @@ async def delete_archive(request: Request):
 async def get_current_theme():
     """Get the currently active theme"""
     return {"theme": CURRENT_THEME}
+
+@app.get("/api/font-scales")
+async def get_font_scales():
+    """Return the current per-section font multipliers."""
+    return {"scales": dict(FONT_SCALES), "min": FONT_SCALE_MIN, "max": FONT_SCALE_MAX}
+
+@app.post("/api/font-scales")
+async def set_font_scales(request: Request):
+    """Update one or more per-section font multipliers and persist them."""
+    global FONT_SCALES
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    scales = body.get("scales") if isinstance(body, dict) else None
+    if not isinstance(scales, dict):
+        raise HTTPException(status_code=400, detail="Expected {'scales': {...}}")
+
+    new_scales = dict(FONT_SCALES)
+    for section, value in scales.items():
+        if section in FONT_SCALE_SECTIONS:
+            new_scales[section] = _clamp_font_scale(value)
+    FONT_SCALES = new_scales
+
+    cfg = load_config()
+    cfg['font_scales'] = new_scales
+    save_config(cfg)
+    return {"status": "success", "scales": new_scales}
+
+@app.get("/api/git-context")
+async def api_git_context(request: Request):
+    """Return git repo info for the active folder, if any."""
+    folder_path = request.app.state.folder_path
+    return get_git_context(folder_path)
+
+@app.get("/api/search")
+async def search_notes(request: Request, q: str = ""):
+    """Search notes in the current folder for a substring (case-insensitive).
+
+    Returns matching note indexes and short snippets. The frontend renders
+    the results inline; this endpoint stays cheap by scanning in-memory
+    notes rather than re-reading notes.md.
+    """
+    query = (q or "").strip()
+    if not query:
+        return {"query": "", "matches": []}
+    needle = query.lower()
+    matches = []
+    for idx, note in enumerate(note_manager.notes):
+        haystack = f"{note.title}\n{note.content}".lower()
+        pos = haystack.find(needle)
+        if pos < 0:
+            continue
+        # Build a snippet around the first match.
+        body = f"{note.title}\n{note.content}"
+        snippet_start = max(0, pos - 40)
+        snippet_end = min(len(body), pos + len(needle) + 40)
+        snippet = body[snippet_start:snippet_end].replace('\n', ' ')
+        matches.append({
+            "index": idx,
+            "title": note.title or "(untitled)",
+            "timestamp": note.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "snippet": snippet,
+            "count": haystack.count(needle),
+        })
+    return {"query": query, "matches": matches}
 
 @app.post("/api/upload-file")
 async def upload_file(request: Request, file: UploadFile = File(...)):
@@ -2202,8 +2343,76 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NoteFlow</title>
     <style>
-        """ + FONT_FACES + """    
+        """ + FONT_FACES + """
         <!-- THEME_STYLES -->
+        /* Per-section font scaling (admin panel adjusts these) */
+        :root {
+            <!-- FONT_SCALE_VARS -->
+        }
+        #notesContainer { font-size: calc(1rem * var(--font-scale-notes, 1)); }
+        #activeTasks { font-size: calc(0.85rem * var(--font-scale-tasks, 1)); }
+        #linksSection { font-size: calc(0.7rem * var(--font-scale-links, 1)); }
+        /* Local search panel */
+        .search-box {
+            background: var(--box-bg, #26292c);
+            padding: 4px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+        .search-box input {
+            flex: 1;
+            background: transparent;
+            border: 1px solid #555;
+            color: inherit;
+            font-family: inherit;
+            font-size: 0.7rem;
+            padding: 2px 4px;
+        }
+        .search-results {
+            background: var(--box-bg, #26292c);
+            padding: 4px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            max-height: 220px;
+            overflow-y: auto;
+        }
+        .search-results .hit {
+            padding: 3px 4px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            cursor: pointer;
+        }
+        .search-results .hit:hover { background: rgba(255,255,255,0.05); }
+        .search-results .hit .hit-title { font-weight: bold; }
+        .search-results .hit .hit-snippet { opacity: 0.75; font-size: 0.6rem; }
+        .search-results .hit mark {
+            background: var(--accent, #df8a3e);
+            color: #000;
+            padding: 0 1px;
+        }
+        /* Git context badge — sits on the directory bar */
+        .git-badge {
+            font-family: monospace;
+            font-size: 0.55rem;
+            padding: 2px 6px;
+            background: rgba(0,0,0,0.35);
+            color: var(--accent, #df8a3e);
+            border-radius: 3px;
+            margin-left: auto;
+            white-space: nowrap;
+        }
+        .git-badge.detached { background: rgba(180,40,40,0.4); }
+        /* Font scale sliders in admin panel */
+        .font-scales { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+        .font-scales label {
+            display: flex; align-items: center; gap: 4px;
+            font-size: 0.7rem; color: inherit;
+        }
+        .font-scales input[type="range"] { flex: 1; }
+        .font-scales .val { width: 30px; text-align: right; font-family: monospace; font-size: 0.65rem; }
     </style>
     <script>
         const CURRENT_THEME = '""" + CURRENT_THEME + """';
@@ -2528,6 +2737,118 @@ HTML_TEMPLATE = """
             });
         }
 
+        // ---- Local search ---------------------------------------------------
+        let _searchTimer = null;
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, (c) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[c]);
+        }
+        function highlight(text, query) {
+            if (!query) return escapeHtml(text);
+            const escQ = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const re = new RegExp(escQ, 'gi');
+            return escapeHtml(text).replace(re, (m) => '<mark>' + m + '</mark>');
+        }
+        async function runSearch(query) {
+            const resultsBox = document.getElementById('searchResults');
+            if (!query) {
+                resultsBox.style.display = 'none';
+                resultsBox.innerHTML = '';
+                document.getElementById('searchClear').style.display = 'none';
+                return;
+            }
+            document.getElementById('searchClear').style.display = 'inline';
+            try {
+                const resp = await fetch('/api/search?q=' + encodeURIComponent(query));
+                const data = await resp.json();
+                if (!data.matches.length) {
+                    resultsBox.innerHTML = '<div class="hit"><em>No matches.</em></div>';
+                } else {
+                    resultsBox.innerHTML = data.matches.map((m) => (
+                        '<div class="hit" data-index="' + m.index + '">' +
+                        '<span class="hit-title">' + highlight(m.title || '(untitled)', query) + '</span>' +
+                        ' <span style="opacity:0.5;">[' + m.timestamp + '] ×' + m.count + '</span>' +
+                        '<div class="hit-snippet">' + highlight(m.snippet, query) + '</div>' +
+                        '</div>'
+                    )).join('');
+                    resultsBox.querySelectorAll('.hit').forEach((row) => {
+                        row.addEventListener('click', () => {
+                            const idx = row.getAttribute('data-index');
+                            const note = document.getElementById('note-' + idx);
+                            if (note) {
+                                note.classList.remove('collapsed');
+                                note.scrollIntoView({behavior: 'smooth', block: 'start'});
+                                note.style.outline = '2px solid var(--accent, #df8a3e)';
+                                setTimeout(() => { note.style.outline = ''; }, 1200);
+                            }
+                        });
+                    });
+                }
+                resultsBox.style.display = 'block';
+            } catch (e) {
+                console.error('Search failed:', e);
+            }
+        }
+
+        // ---- Font scaling ---------------------------------------------------
+        async function loadFontScales() {
+            try {
+                const resp = await fetch('/api/font-scales');
+                const data = await resp.json();
+                const container = document.getElementById('fontScales');
+                if (!container) return;
+                container.innerHTML = '';
+                Object.entries(data.scales).forEach(([section, value]) => {
+                    const row = document.createElement('label');
+                    row.innerHTML = (
+                        '<span style="width:35px;">' + section + '</span>' +
+                        '<input type="range" min="' + data.min + '" max="' + data.max + '"' +
+                        ' step="0.05" value="' + value + '" data-section="' + section + '">' +
+                        '<span class="val">' + Number(value).toFixed(2) + '</span>'
+                    );
+                    const slider = row.querySelector('input');
+                    const valSpan = row.querySelector('.val');
+                    slider.addEventListener('input', () => {
+                        const v = parseFloat(slider.value);
+                        document.documentElement.style.setProperty(
+                            '--font-scale-' + section, v
+                        );
+                        valSpan.textContent = v.toFixed(2);
+                    });
+                    slider.addEventListener('change', async () => {
+                        await fetch('/api/font-scales', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({scales: {[section]: parseFloat(slider.value)}})
+                        });
+                    });
+                    container.appendChild(row);
+                });
+            } catch (e) {
+                console.error('Font scales load failed:', e);
+            }
+        }
+
+        // ---- Git context badge ---------------------------------------------
+        async function loadGitContext() {
+            try {
+                const resp = await fetch('/api/git-context');
+                const data = await resp.json();
+                const badge = document.getElementById('gitBadge');
+                if (!badge || !data.is_repo) return;
+                const label = data.branch
+                    ? data.branch + (data.sha ? ' @ ' + data.sha : '')
+                    : 'detached @ ' + (data.sha || '?');
+                badge.textContent = label;
+                badge.title = data.branch ? 'Branch: ' + data.branch : 'Detached HEAD';
+                if (!data.branch) badge.classList.add('detached');
+                badge.style.display = 'inline-block';
+            } catch (e) {
+                /* not in a git repo or other issue — silently hide */
+            }
+        }
+
         // Copy text to clipboard with brief visual feedback on the element.
         async function copyToClipboard(text, element) {
             try {
@@ -2595,11 +2916,41 @@ HTML_TEMPLATE = """
             // Directory bar: click anywhere on it to copy the folder path.
             const dirBar = document.getElementById('directoryBar');
             if (dirBar) {
-                dirBar.addEventListener('click', () => {
+                dirBar.addEventListener('click', (e) => {
+                    // Let clicks on the git badge through (it's informational only).
+                    if (e.target.closest('#gitBadge')) return;
                     const path = dirBar.querySelector('.directory-bar-content');
                     if (path) copyToClipboard(path.textContent.trim(), dirBar);
                 });
             }
+
+            // Local search: debounce input -> /api/search.
+            const searchInput = document.getElementById('searchInput');
+            const searchClear = document.getElementById('searchClear');
+            if (searchInput) {
+                searchInput.addEventListener('input', () => {
+                    clearTimeout(_searchTimer);
+                    const q = searchInput.value.trim();
+                    _searchTimer = setTimeout(() => runSearch(q), 150);
+                });
+                searchInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        searchInput.value = '';
+                        runSearch('');
+                    }
+                });
+            }
+            if (searchClear) {
+                searchClear.addEventListener('click', () => {
+                    searchInput.value = '';
+                    runSearch('');
+                    searchInput.focus();
+                });
+            }
+
+            // Admin panel + header niceties
+            await loadFontScales();
+            await loadGitContext();
 
             // Get the textarea element
             const noteContent = document.getElementById('noteContent');
@@ -2717,7 +3068,19 @@ print('Hello, World!')
                 <span class="directory-bar-content">{folder_path}&nbsp;</span>
                 <span class="directory-bar-content">{folder_path}&nbsp;</span>
                 <span class="directory-bar-content">{folder_path}&nbsp;</span>
+                <span id="gitBadge" class="git-badge" style="display:none;"></span>
             </div>
+
+            <!-- Local Search -->
+            <div class="search-box">
+                <input type="text" id="searchInput"
+                       placeholder="Search notes in this folder…"
+                       autocomplete="off">
+                <span id="searchClear"
+                      style="cursor:pointer;display:none;font-size:0.65rem;opacity:0.7;"
+                      title="Clear">&times;</span>
+            </div>
+            <div id="searchResults" class="search-results" style="display:none;"></div>
 
             <!-- Tasks Box -->
             <div id="activeTasks" class="task-box">
@@ -2762,6 +3125,9 @@ print('Hello, World!')
                 <!-- Will be populated dynamically -->
             </select>
             <button class="admin-button" onclick="saveTheme()">Save Theme</button>
+            <div class="font-scales" id="fontScales">
+                <!-- Sliders inserted dynamically -->
+            </div>
             <button class="admin-button" onclick="shutdownServer()">Shutdown</button>
         </div>
     </div>
