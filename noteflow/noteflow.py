@@ -2114,7 +2114,7 @@ THEMED_STYLES = """
             border: 1px solid {colors[admin_border]};
             border-left: none;
             border-bottom-left-radius: 7px;
-            width: 150px;
+            width: 210px;
             display: flex;
             flex-direction: column;
             gap: 10px;
@@ -2319,13 +2319,30 @@ HTML_TEMPLATE = """
         }
         .git-badge.detached { background: rgba(180,40,40,0.4); }
         /* Font scale sliders in admin panel */
-        .font-scales { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
-        .font-scales label {
-            display: flex; align-items: center; gap: 4px;
+        .font-scales {
+            display: flex; flex-direction: column; gap: 6px;
+            margin: 4px 0; padding: 6px 0;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        .font-scales .row {
+            display: flex; align-items: center; gap: 6px;
             font-size: 0.7rem; color: inherit;
         }
-        .font-scales input[type="range"] { flex: 1; }
-        .font-scales .val { width: 30px; text-align: right; font-family: monospace; font-size: 0.65rem; }
+        .font-scales .row .label {
+            width: 42px;
+            font-family: monospace;
+            opacity: 0.8;
+        }
+        .font-scales .row input[type="range"] {
+            flex: 1; min-width: 0;
+            accent-color: var(--accent, #df8a3e);
+        }
+        .font-scales .row .val {
+            width: 32px; text-align: right;
+            font-family: monospace; font-size: 0.65rem;
+            opacity: 0.7;
+        }
         .global-tasks-link {
             font-size: 0.7rem;
             text-align: right;
@@ -2345,19 +2362,22 @@ HTML_TEMPLATE = """
             background: #26292c; color: var(--accent, #df8a3e);
             border: 1px solid #555; border-right: none;
             padding: 12px 6px; cursor: pointer;
-            writing-mode: vertical-rl; transform-origin: center;
+            writing-mode: vertical-rl;
             font-family: monospace; font-size: 0.7rem;
-            border-radius: 6px 0 0 6px; letter-spacing: 1px; z-index: 999;
+            border-radius: 6px 0 0 6px; letter-spacing: 1px; z-index: 1001;
         }
         #aiToggle:hover { background: #3a3f47; }
+        /* Display-based show/hide — more reliable than transform sliding
+           in case any ancestor or sibling steals the stacking context. */
         #aiPanel {
             position: fixed; right: 0; top: 0; bottom: 0; width: 460px;
-            background: #1c1f22; color: #c0c0c0; box-shadow: -2px 0 14px rgba(0,0,0,0.5);
-            border-left: 1px solid #555; transform: translateX(100%);
-            transition: transform 0.2s ease; z-index: 1000;
-            display: flex; flex-direction: column; font-family: monospace;
+            background: #1c1f22; color: #c0c0c0;
+            box-shadow: -2px 0 14px rgba(0,0,0,0.5);
+            border-left: 1px solid #555; z-index: 1002;
+            font-family: monospace;
+            display: none;
         }
-        #aiPanel.open { transform: translateX(0); }
+        #aiPanel.open { display: flex; flex-direction: column; }
         #aiPanel header {
             padding: 8px 12px; background: #26292c; display: flex;
             justify-content: space-between; align-items: center;
@@ -2826,12 +2846,13 @@ HTML_TEMPLATE = """
                 if (!container) return;
                 container.innerHTML = '';
                 Object.entries(data.scales).forEach(([section, value]) => {
-                    const row = document.createElement('label');
+                    const row = document.createElement('div');
+                    row.className = 'row';
                     row.innerHTML = (
-                        '<span style="width:35px;">' + section + '</span>' +
+                        '<span class="label">' + section + '</span>' +
                         '<input type="range" min="' + data.min + '" max="' + data.max + '"' +
                         ' step="0.05" value="' + value + '" data-section="' + section + '">' +
-                        '<span class="val">' + Number(value).toFixed(2) + '</span>'
+                        '<span class="val">' + Number(value).toFixed(2) + 'x</span>'
                     );
                     const slider = row.querySelector('input');
                     const valSpan = row.querySelector('.val');
@@ -2840,7 +2861,7 @@ HTML_TEMPLATE = """
                         document.documentElement.style.setProperty(
                             '--font-scale-' + section, v
                         );
-                        valSpan.textContent = v.toFixed(2);
+                        valSpan.textContent = v.toFixed(2) + 'x';
                     });
                     slider.addEventListener('change', async () => {
                         await fetch('/api/font-scales', {
