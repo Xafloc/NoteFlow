@@ -18,7 +18,8 @@ import base64
 import re
 import time
 import mimetypes
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import concurrent.futures
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -31,10 +32,13 @@ from bs4 import BeautifulSoup
 ###############################################################################
 # Tunables
 ###############################################################################
-RESOURCE_TIMEOUT = 10          # seconds per individual fetch
+CONNECT_TIMEOUT = 5            # seconds to establish the TCP connection
+READ_TIMEOUT = 8               # seconds to wait between data chunks
+RESOURCE_TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
 TOTAL_TIMEOUT = 30             # seconds for the whole archive operation
 MAX_RESOURCE_BYTES = 8 * 1024 * 1024  # skip resources larger than 8 MiB
-MAX_WORKERS = 16               # concurrent prefetch workers (matches obelisk default)
+MAX_WORKERS = 12               # concurrent prefetch workers
+MAX_PREFETCH = 32              # hard cap on URLs we prefetch up front
 
 IGNORED_DOMAINS = {
     'metrics.',
@@ -95,25 +99,53 @@ def fetch_resource(session, url, cache=None, deadline=None):
 
 
 def prefetch(session, urls, cache, deadline):
-    """Warm the cache for many URLs in parallel.
+    """Warm the cache for the most important URLs in parallel.
 
-    Bounded by MAX_WORKERS in-flight; respects the deadline by skipping
-    any URLs queued after time expires.
+    Bounded by:
+      - MAX_PREFETCH       (don't dispatch unbounded work)
+      - MAX_WORKERS        (concurrency)
+      - the archive deadline (stop waiting on stragglers when it expires)
     """
-    pending = [u for u in urls if u not in cache and not should_ignore_resource(u)]
+    seen = set()
+    pending = []
+    for u in urls:
+        if u in cache or u in seen or should_ignore_resource(u):
+            continue
+        seen.add(u)
+        pending.append(u)
+        if len(pending) >= MAX_PREFETCH:
+            break
     if not pending:
         return
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {}
+
+    # Don't enter the threadpool at all if the deadline is already blown.
+    remaining = deadline - time.time() if deadline else None
+    if remaining is not None and remaining <= 0:
         for u in pending:
-            if deadline and time.time() > deadline:
-                break
-            futures[pool.submit(_fetch_one, session, u)] = u
-        for f, u in futures.items():
+            cache[u] = (None, None)
+        return
+
+    pool = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+    futures = {pool.submit(_fetch_one, session, u): u for u in pending}
+    try:
+        for f in as_completed(futures, timeout=remaining):
+            u = futures[f]
             try:
-                cache[u] = f.result(timeout=RESOURCE_TIMEOUT + 2)
+                cache[u] = f.result()
             except Exception:
                 cache[u] = (None, None)
+    except concurrent.futures.TimeoutError:
+        # Deadline hit while we still had pending fetches. Mark whatever
+        # didn't complete as failed and move on — the serial walker can
+        # still write out a partial archive with the assets we did get.
+        for f, u in futures.items():
+            if u not in cache:
+                cache[u] = (None, None)
+    finally:
+        # cancel_futures cancels anything that hasn't started yet; threads
+        # that are mid-request will exit naturally as their per-request
+        # read timeout fires.
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def convert_to_data_uri(content_bytes: bytes, content_type: Optional[str]) -> str:
