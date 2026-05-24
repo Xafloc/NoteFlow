@@ -23,18 +23,20 @@ A major release that backports the feature surface from [noteflow-go](https://gi
 
 ## Screenshots
 
-#### Initial View
-![Initial View](/screenshot_1.png)
-#### Markdown Editor
-![Markdown Editor](/screenshot_2.png)
-#### Upload Images and Files
-![Upload Images and Files](/screenshot_3.png)
-#### Point in Time Site Copy / Bookmark
-![Point in Time Site Copy/Bookmark](/screenshot_4.png)
-#### Multiple Themes
-![Multiple Themes](/screenshot_5.png)
-#### Math Rendering
-![Math Rendering](/screenshot_6.png)
+#### Main view — demo notes, tasks with metadata chips, right-edge tabs
+![Main view](/screenshots/noteflow-py-main.png)
+
+#### Fonts panel — live previews of per-section scaling
+![Fonts panel](/screenshots/noteflow-py-fonts.png)
+
+#### AI assist — chat your notes via any OpenAI-compatible endpoint
+![AI assist](/screenshots/noteflow-py-ai.png)
+
+#### Commits panel — recent git history for the active folder
+![Commits panel](/screenshots/noteflow-py-commits.png)
+
+#### Themes
+![Themes](/screenshots/noteflow-py-theme.png)
 
 ## Features
 
