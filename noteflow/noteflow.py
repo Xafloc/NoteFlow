@@ -31,6 +31,7 @@ from mdit_py_plugins.dollarmath import dollarmath_plugin
 from . import archiver
 from . import folders as folders_module
 from . import ai as ai_module
+from . import sigils
 
 ###############################################################################
 # Constants & Configuration
@@ -882,14 +883,17 @@ async def get_notes():
 async def add_note(request: Request, title: str = Form(...), content: str = Form(...)):
     """Add a new note"""
     
-    # Retrieve folder_path from app.state
     folder_path = request.app.state.folder_path
 
-    # Process any +http links in the content
+    # Expand +file: sigils first so any embedded code is in place before
+    # the archiver scans for +http URLs (a +file body wouldn't contain
+    # one, but ordering is explicit so future sigils can compose).
+    content = sigils.expand_file_sigils(content, folder_path)
+
     if '+http' in content:
         print("Found +http link, processing...")
         processed = await archiver.process_plus_links(content, folder_path, app_port=APP_PORT)
-        content = processed['markdown']  # Use the markdown version for storage
+        content = processed['markdown']
 
     note_manager.add_note(title, content)
     note_manager.save()
@@ -927,13 +931,13 @@ async def update_note(note_index: int, title: str = Form(...), content: str = Fo
     """Update an existing note"""
     try:
         note = note_manager.notes[note_index]
-        
-        # Process any +http links in the content
+
+        content = sigils.expand_file_sigils(content, note_manager.base_path)
+
         if '+http' in content:
             processed = await archiver.process_plus_links(content, note_manager.base_path, app_port=APP_PORT)
             content = processed['markdown']
-        
-        # Update the note
+
         note.update(title, content)
         note_manager.save()
         return {"status": "success"}

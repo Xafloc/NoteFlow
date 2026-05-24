@@ -132,11 +132,13 @@ def run_append(argv: List[str]) -> int:
 
     # Defer heavy imports so `noteflow tasks --help` stays snappy.
     from .noteflow import NoteManager, create_directories, validate_folder_path, APP_PORT
-    from . import archiver, folders as folders_module
+    from . import archiver, folders as folders_module, sigils
 
     target = validate_folder_path(args.folder)
     create_directories(target)
     nm = NoteManager(target)
+
+    body = sigils.expand_file_sigils(body, target)
 
     if "+http" in body:
         processed = asyncio.run(archiver.process_plus_links(body, target, app_port=APP_PORT))
