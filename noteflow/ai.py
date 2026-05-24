@@ -167,6 +167,7 @@ def stream_chat(ai_cfg: Dict, messages: List[Dict]) -> Iterator[bytes]:
         "stream": True,
     }
     tokens_yielded = 0
+    raw_sample = ""  # kept for diagnostics when nothing parsed
     try:
         with requests.post(
             endpoint,
@@ -184,6 +185,10 @@ def stream_chat(ai_cfg: Dict, messages: List[Dict]) -> Iterator[bytes]:
                 if not raw_line:
                     continue
                 line = raw_line.strip()
+                # Keep a small sample of the raw upstream body so the
+                # non-streaming fallback below can guess the format.
+                if len(raw_sample) < 4096:
+                    raw_sample += line + "\n"
                 if not line.startswith("data:"):
                     continue
                 data = line[5:].strip()
@@ -193,21 +198,45 @@ def stream_chat(ai_cfg: Dict, messages: List[Dict]) -> Iterator[bytes]:
                     obj = json.loads(data)
                 except json.JSONDecodeError:
                     continue
+                # OpenAI-compatible streaming format.
                 choices = obj.get("choices") or []
-                if not choices:
-                    continue
-                delta = choices[0].get("delta") or {}
-                text = delta.get("content")
-                if text:
-                    tokens_yielded += 1
-                    yield _sse_text(text)
+                if choices:
+                    delta = choices[0].get("delta") or {}
+                    text = delta.get("content")
+                    if text:
+                        tokens_yielded += 1
+                        yield _sse_text(text)
+                        continue
+                # Anthropic-native streaming: {type:"content_block_delta",
+                # delta:{type:"text_delta",text:"..."}}
+                if obj.get("type") == "content_block_delta":
+                    delta = obj.get("delta") or {}
+                    text = delta.get("text")
+                    if text:
+                        tokens_yielded += 1
+                        yield _sse_text(text)
+
         if tokens_yielded == 0:
-            # 200 OK + clean close but no token content. Usually means the
-            # upstream returned a non-streaming body, or an empty completion.
-            yield _sse_error(
-                "upstream returned no tokens — endpoint may not support "
-                "streaming responses, or model returned empty content."
-            )
+            # Streaming returned no tokens. Most often the upstream
+            # ignored `stream: true` and gave us one non-streaming JSON
+            # body. Retry without streaming and parse the standard
+            # OpenAI completion shape.
+            fallback_text, fallback_err = _try_non_streaming(endpoint, headers, dict(payload, stream=False))
+            if fallback_text:
+                yield _sse_text(fallback_text)
+            elif fallback_err:
+                yield _sse_error(
+                    f"endpoint returned no streaming tokens; non-streaming "
+                    f"retry also failed: {fallback_err}"
+                )
+            else:
+                hint = ""
+                if raw_sample.strip():
+                    hint = f" (first bytes of response: {raw_sample[:200]!r})"
+                yield _sse_error(
+                    f"upstream returned no tokens — model produced empty "
+                    f"content, or response format is unsupported.{hint}"
+                )
         yield _sse_done()
     except requests.exceptions.ConnectTimeout:
         yield _sse_error(
@@ -234,6 +263,50 @@ def stream_chat(ai_cfg: Dict, messages: List[Dict]) -> Iterator[bytes]:
     except Exception as e:
         yield _sse_error(f"upstream proxy error: {type(e).__name__}: {e}")
         yield _sse_done()
+
+
+def _try_non_streaming(endpoint, headers, payload):
+    """Fall back to a one-shot POST. Returns (text, error_message).
+
+    Handles two response shapes:
+      - OpenAI:   choices[0].message.content
+      - Anthropic native: content[0].text
+    """
+    try:
+        resp = requests.post(endpoint, headers=headers, json=payload, timeout=UPSTREAM_TIMEOUT)
+    except requests.exceptions.ReadTimeout:
+        return None, f"upstream did not respond within {STREAM_IDLE_TIMEOUT}s"
+    except requests.exceptions.ConnectTimeout:
+        return None, f"could not connect within {CONNECT_TIMEOUT}s"
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+    if not resp.ok:
+        return None, f"HTTP {resp.status_code}: {resp.text[:300]}"
+    try:
+        obj = resp.json()
+    except Exception:
+        return None, f"non-JSON response: {resp.text[:200]!r}"
+
+    # OpenAI shape
+    choices = obj.get("choices") if isinstance(obj, dict) else None
+    if choices:
+        msg = choices[0].get("message") or {}
+        text = msg.get("content")
+        if isinstance(text, str) and text:
+            return text, None
+
+    # Anthropic native shape
+    content = obj.get("content") if isinstance(obj, dict) else None
+    if isinstance(content, list) and content:
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+        if parts:
+            return "".join(parts), None
+
+    return None, f"unrecognized response shape: {json.dumps(obj)[:300]}"
 
 
 def _sse_text(text: str) -> bytes:
