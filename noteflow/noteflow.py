@@ -2991,6 +2991,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "with task management. Run inside any folder; notes are stored in "
             "notes.md and archives under assets/sites/."
         ),
+        epilog=(
+            "Subcommands (run with --help for details):\n"
+            "  noteflow append [--title TITLE] [BODY...]   Append a note from the CLI.\n"
+            "  noteflow tasks  [filters / actions]         Query, filter, toggle tasks\n"
+            "                                              across every registered folder."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "folder",
@@ -3030,6 +3037,13 @@ def _open_browser_when_ready(url: str, delay: float = 1.0):
 def main():
     import uvicorn
     global note_manager, folder_registry
+
+    # Subcommand dispatch — `noteflow append …` or `noteflow tasks …` run
+    # the CLI handlers and exit; everything else (including a bare path)
+    # boots the web server below.
+    if len(sys.argv) > 1 and sys.argv[1] in {"append", "tasks"}:
+        from . import cli
+        sys.exit(cli.dispatch(sys.argv[1], sys.argv[2:]))
 
     args = _build_arg_parser().parse_args()
 
