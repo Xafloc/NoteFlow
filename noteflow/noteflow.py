@@ -7,16 +7,13 @@ import re
 import json
 import html
 import mimetypes
-import base64
 import argparse
 import threading
 import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
-from urllib.parse import urlparse, urljoin, quote, unquote
-import requests
-from bs4 import BeautifulSoup
+from urllib.parse import urlparse, quote
 from fastapi import FastAPI, HTTPException, Form, UploadFile, File, Path as FastAPIPath, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +28,8 @@ import signal
 import time
 from mdit_py_plugins.dollarmath import dollarmath_plugin
 
+from . import archiver
+
 ###############################################################################
 # Constants & Configuration
 ###############################################################################
@@ -38,18 +37,6 @@ __version__ = "0.4.0"
 NOTE_SEPARATOR = "\n<!-- note -->\n"
 APP_PORT = None
 CURRENT_THEME = "dark-orange" # Default theme
-IGNORED_DOMAINS = {
-    'metrics.',
-    'analytics.',
-    'prismstandard.org',
-    'outbrain.com',
-    'tapad.com',
-    'livefyre.com',
-    'trustx.org',
-    'tracking.',
-    'stats.',
-    'ads.',
-}
 
 # Theme Definitions
 THEMES = {
@@ -808,217 +795,6 @@ def validate_folder_path(folder_path_input: Optional[str] = None) -> Path:
     
     return path
 
-def should_ignore_resource(url):
-    """Check if the resource URL should be ignored."""
-    try:
-        parsed = urlparse(url)
-        return any(ignored in parsed.netloc.lower() for ignored in IGNORED_DOMAINS)
-    except:
-        return False
-
-###############################################################################
-# Improved Resource Inlining (NEW)
-###############################################################################
-# Per-archive request cache shared across passes. Each archive operation
-# creates a fresh cache so repeated @import / url(...) refs only hit the
-# network once. Mirrors go-shiori/obelisk's caching behavior.
-ARCHIVE_RESOURCE_TIMEOUT = 10   # seconds per individual fetch
-ARCHIVE_TOTAL_TIMEOUT = 30      # seconds for the whole archive operation
-ARCHIVE_MAX_RESOURCE_BYTES = 8 * 1024 * 1024  # skip resources larger than 8 MiB
-
-def fetch_resource(session, url, cache=None, deadline=None):
-    """Fetch a resource and return (bytes, content-type), or (None, None) on failure.
-
-    `cache` is an optional dict mapping URL -> (content, content_type) used to
-    deduplicate fetches within a single archive operation. `deadline` is an
-    optional absolute time.time() limit after which we stop fetching.
-    """
-    if cache is not None and url in cache:
-        return cache[url]
-    if deadline is not None and time.time() > deadline:
-        if cache is not None:
-            cache[url] = (None, None)
-        return None, None
-    try:
-        resp = session.get(url, timeout=ARCHIVE_RESOURCE_TIMEOUT, stream=True)
-        if resp.ok:
-            # Reject pathologically large resources rather than ballooning the archive.
-            cl = resp.headers.get('content-length')
-            if cl and cl.isdigit() and int(cl) > ARCHIVE_MAX_RESOURCE_BYTES:
-                resp.close()
-                result = (None, None)
-            else:
-                content = resp.content
-                if len(content) > ARCHIVE_MAX_RESOURCE_BYTES:
-                    result = (None, None)
-                else:
-                    result = (content, resp.headers.get('content-type', ''))
-        else:
-            result = (None, None)
-    except Exception as e:
-        print(f"Error fetching {url}: {e}")
-        result = (None, None)
-    if cache is not None:
-        cache[url] = result
-    return result
-
-def convert_to_data_uri(content_bytes, content_type):
-    if not content_type:
-        content_type = 'application/octet-stream'
-    b64 = base64.b64encode(content_bytes).decode('utf-8')
-    return f"data:{content_type};base64,{b64}"
-
-def inline_css_resources(session, css_content, base_url, cache=None, deadline=None):
-    done = False
-    # Inline @import and url(...) multiple times until no external refs remain
-    while not done:
-        done = True
-        import_pattern = re.compile(r'@import\s+["\']([^"\']+)["\'];')
-        imports = import_pattern.findall(css_content)
-        for imp in imports:
-            if imp.startswith('data:'):
-                continue
-            done = False
-            css_url = urljoin(base_url, imp)
-            content, ctype = fetch_resource(session, css_url, cache=cache, deadline=deadline)
-            if content:
-                sub_css = content.decode('utf-8', errors='replace')
-                sub_css = inline_css_resources(session, sub_css, css_url, cache=cache, deadline=deadline)
-                css_content = css_content.replace(f'@import "{imp}";', sub_css)
-            else:
-                css_content = css_content.replace(f'@import "{imp}";', '')
-
-        url_pattern = re.compile(r'url\(["\']?([^)"\']+)["\']?\)')
-        urls = url_pattern.findall(css_content)
-        for u in urls:
-            if u.startswith('data:'):
-                continue
-            if u.endswith('.map'):  # Skip source map files
-                continue
-            done = False
-            resource_url = urljoin(base_url, u)
-            cbytes, ctype = fetch_resource(session, resource_url, cache=cache, deadline=deadline)
-            if cbytes:
-                data_uri = convert_to_data_uri(cbytes, ctype)
-                css_content = css_content.replace(f'url({u})', f'url({data_uri})')
-            # If fail, we leave it as is
-
-    return css_content
-
-def inline_html_resources(session, soup, base_url, cache=None, deadline=None):
-    # Images and srcset
-    for img in soup.find_all('img'):
-        src = img.get('src')
-        if src and not src.startswith('data:') and not should_ignore_resource(src):
-            full_url = urljoin(base_url, src)
-            cbytes, ctype = fetch_resource(session, full_url, cache=cache, deadline=deadline)
-            if cbytes:
-                img['src'] = convert_to_data_uri(cbytes, ctype)
-
-        # srcset
-        srcset = img.get('srcset')
-        if srcset:
-            parts = []
-            for part in srcset.split(','):
-                urlpart = part.strip().split(' ')[0]
-                if urlpart and not urlpart.startswith('data:') and not should_ignore_resource(urlpart):
-                    full_url = urljoin(base_url, urlpart)
-                    cbytes, ctype = fetch_resource(session, full_url, cache=cache, deadline=deadline)
-                    if cbytes:
-                        data_uri = convert_to_data_uri(cbytes, ctype)
-                        rest = part.strip()[len(urlpart):]
-                        parts.append(data_uri + rest)
-                    else:
-                        parts.append(part)
-                else:
-                    parts.append(part)
-            img['srcset'] = ', '.join(parts)
-
-    # <source> tags (picture, audio, video)
-    for source in soup.find_all('source'):
-        ssrc = source.get('src')
-        if ssrc and not ssrc.startswith('data:') and not should_ignore_resource(ssrc):
-            full_url = urljoin(base_url, ssrc)
-            cbytes, ctype = fetch_resource(session, full_url, cache=cache, deadline=deadline)
-            if cbytes:
-                source['src'] = convert_to_data_uri(cbytes, ctype)
-
-        srcset = source.get('srcset')
-        if srcset:
-            parts = []
-            for part in srcset.split(','):
-                urlpart = part.strip().split(' ')[0]
-                if urlpart and not urlpart.startswith('data:') and not should_ignore_resource(urlpart):
-                    full_url = urljoin(base_url, urlpart)
-                    cbytes, ctype = fetch_resource(session, full_url, cache=cache, deadline=deadline)
-                    if cbytes:
-                        data_uri = convert_to_data_uri(cbytes, ctype)
-                        rest = part.strip()[len(urlpart):]
-                        parts.append(data_uri + rest)
-                    else:
-                        parts.append(part)
-                else:
-                    parts.append(part)
-            source['srcset'] = ', '.join(parts)
-
-    # Scripts
-    for script in soup.find_all('script'):
-        src = script.get('src')
-        if src and not src.startswith('data:') and not should_ignore_resource(src):
-            res_url = urljoin(base_url, src)
-            cbytes, ctype = fetch_resource(session, res_url, cache=cache, deadline=deadline)
-            if cbytes:
-                script.string = cbytes.decode('utf-8', errors='replace')
-                del script['src']
-
-    # Stylesheets
-    for link in soup.find_all('link', rel='stylesheet'):
-        href = link.get('href')
-        if href and not should_ignore_resource(href):
-            css_url = urljoin(base_url, href)
-            cbytes, ctype = fetch_resource(session, css_url, cache=cache, deadline=deadline)
-            if cbytes:
-                css_text = cbytes.decode('utf-8', errors='replace')
-                css_text = inline_css_resources(session, css_text, css_url, cache=cache, deadline=deadline)
-                style_tag = soup.new_tag('style')
-                style_tag.string = css_text
-                link.replace_with(style_tag)
-
-    # Inline styles in style attributes
-    for elem in soup.find_all(style=True):
-        style_val = elem['style']
-        urls = re.findall(r'url\(["\']?([^)"\']+)["\']?\)', style_val)
-        for u in urls:
-            if not u.startswith('data:') and not should_ignore_resource(u):
-                full_url = urljoin(base_url, u)
-                cbytes, ctype = fetch_resource(session, full_url, cache=cache, deadline=deadline)
-                if cbytes:
-                    data_uri = convert_to_data_uri(cbytes, ctype)
-                    style_val = style_val.replace(u, data_uri)
-        elem['style'] = style_val
-
-    return soup
-
-def inline_all_resources(url, source_html):
-    session = requests.Session()
-    session.headers.update({'User-Agent': 'Mozilla/5.0'})
-    base_url = urljoin(url, '/')
-
-    cache = {}
-    deadline = time.time() + ARCHIVE_TOTAL_TIMEOUT
-
-    soup = BeautifulSoup(source_html, 'html.parser')
-    for _ in range(5): # max 5 passes
-        if time.time() > deadline:
-            break
-        old_html = str(soup)
-        soup = inline_html_resources(session, soup, base_url, cache=cache, deadline=deadline)
-        new_html = str(soup)
-        if new_html == old_html:
-            break
-
-    return str(soup)
-
 ###############################################################################
 # FastAPI Routes
 ###############################################################################
@@ -1103,11 +879,10 @@ async def add_note(request: Request, title: str = Form(...), content: str = Form
 
     # Process any +http links in the content
     if '+http' in content:
-        print("Found +http link, processing...")  # Debug statement
-        processed = await process_plus_links(content, folder_path)
+        print("Found +http link, processing...")
+        processed = await archiver.process_plus_links(content, folder_path, app_port=APP_PORT)
         content = processed['markdown']  # Use the markdown version for storage
-        print("Processed content:", content)  # Debug statement
-    
+
     note_manager.add_note(title, content)
     note_manager.save()
     return {"status": "success"}
@@ -1147,8 +922,8 @@ async def update_note(note_index: int, title: str = Form(...), content: str = Fo
         
         # Process any +http links in the content
         if '+http' in content:
-            processed = await process_plus_links(content, note_manager.base_path)
-            content = processed['markdown']  # Use the markdown version for storage
+            processed = await archiver.process_plus_links(content, note_manager.base_path, app_port=APP_PORT)
+            content = processed['markdown']
         
         # Update the note
         note.update(title, content)
@@ -1195,10 +970,8 @@ async def update_task(request: Request, task_index: int = FastAPIPath(...)):
 async def archive_webpage(request: Request, url: str):
     """Archive a webpage"""
 
-    # Retrieve folder_path from app.state
     folder_path = request.app.state.folder_path
-    
-    result = archive_website(url, folder_path)  # Note: removed 'await' since archive_website isn't async
+    result = archiver.archive_website(url, folder_path)
     if result:
         return {"status": "success", "data": result}
     return {"status": "error", "message": "Failed to archive webpage"}
@@ -3134,262 +2907,6 @@ print('Hello, World!')
 </body>
 </html>
 """
-
-###############################################################################
-# Web Archive Functions
-###############################################################################
-async def process_plus_links(content: str, folder_path: Path) -> Dict[str, str]:
-    """Process +https:// links in the content and create local copies."""
-    print("Processing content for +links...")  # Debug statement
-
-    async def replace_link(match):
-        url = match.group(1)
-        print(f"Found +link: {url}")  # Debug statement
-        
-        # Check if URL is pointing to our own server
-        parsed_url = urlparse(url)
-        host = parsed_url.netloc.split(':')[0]
-        is_localhost = host in ('localhost', '127.0.0.1', '0.0.0.0')
-        is_same_port = APP_PORT and str(parsed_url.port) == str(APP_PORT)
-        
-        if is_localhost and is_same_port:
-            print(f"Self-referencing link detected: {url}")  # Debug statement
-            return {
-                'html': f'{url} <em>(self-referencing link removed)</em>',
-                'markdown': f'{url} *(self-referencing link removed)*'
-            }
-            
-        print(f"Archiving website: {url}")  # Debug statement
-        result = archive_website(url, folder_path)
-        if result:
-            print(f"Archived successfully: {url}")  # Debug statement
-            return result
-        print(f"Failed to archive: {url}")  # Debug statement
-        return {'html': url, 'markdown': url}
-
-    pattern = r'\+((https?://)[^\s]+)'
-    matches = re.finditer(pattern, content)
-    replacements = []
-    for match in matches:
-        replacement = await replace_link(match)
-        replacements.append((match.start(), match.end(), replacement))
-    
-    # Create both HTML and Markdown versions of the content
-    html_result = list(content)
-    markdown_result = list(content)
-    
-    for start, end, replacement in reversed(replacements):
-        html_result[start:end] = replacement['html']
-        markdown_result[start:end] = replacement['markdown']
-    
-    return {
-        'html': ''.join(html_result),
-        'markdown': ''.join(markdown_result)
-    }
-
-def saveFullHtmlPage(url: str, output_path: Path, folder_path: Path, session: Optional[requests.Session] = None):
-    """Save a complete webpage with all assets."""
-    try:
-        if session is None:
-            session = requests.Session()
-            
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        session.headers.update(headers)
-        
-        response = session.get(url)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        base_url = urljoin(url, '/')
-
-        # Handle all resources that need to be embedded
-        for tag, attrs in [
-            ('img', 'src'),
-            ('link', 'href'),
-            ('script', 'src'),
-            ('source', 'src'),
-            ('video', 'src'),
-            ('audio', 'src'),
-            ('picture', 'src'),
-        ]:
-            for element in soup.find_all(tag):
-                src = element.get(attrs, '')
-                if not src or src.startswith('data:'):
-                    continue
-                    
-                if should_ignore_resource(src):
-                    continue
-                
-                try:
-                    resource_url = urljoin(url, src)
-                    resource_response = session.get(resource_url, timeout=10)  # Add timeout
-                    if resource_response.ok:
-                        content_type = resource_response.headers.get('content-type', '')
-                        if not content_type:
-                            content_type = mimetypes.guess_type(src)[0] or 'application/octet-stream'
-                        resource_data = base64.b64encode(resource_response.content).decode('utf-8')
-                        element[attrs] = f'data:{content_type};base64,{resource_data}'
-                except Exception as e:
-                    if not should_ignore_resource(src):
-                        print(f"Error processing resource {src}: {e}")
-                    continue
-
-        # Handle CSS files and their resources
-        for style in soup.find_all('style') + soup.find_all('link', rel='stylesheet'):
-            if style.name == 'link':
-                href = style.get('href')
-                if not href or should_ignore_resource(href):
-                    continue
-                try:
-                    css_url = urljoin(url, href)
-                    css_response = session.get(css_url, timeout=10)
-                    if css_response.ok:
-                        css_content = css_response.text
-                    else:
-                        continue
-                except:
-                    continue
-            else:
-                css_content = style.string or ''
-
-            # Process CSS URLs
-            css_urls = re.findall(r'url\(["\']?([^)"\']+)["\']?\)', css_content)
-            for css_url in css_urls:
-                if css_url.startswith('data:') or should_ignore_resource(css_url):
-                    continue
-                try:
-                    resource_url = urljoin(url, css_url)
-                    resource_response = session.get(resource_url, timeout=10)
-                    if resource_response.ok:
-                        content_type = resource_response.headers.get('content-type', '')
-                        if not content_type:
-                            content_type = mimetypes.guess_type(css_url)[0] or 'application/octet-stream'
-                        resource_data = base64.b64encode(resource_response.content).decode('utf-8')
-                        css_content = css_content.replace(
-                            f'url({css_url})',
-                            f'url(data:{content_type};base64,{resource_data})'
-                        )
-                except Exception as e:
-                    if not should_ignore_resource(css_url):
-                        print(f"Error processing CSS resource {css_url}: {e}")
-
-            if style.name == 'link':
-                new_style = soup.new_tag('style')
-                new_style.string = css_content
-                style.replace_with(new_style)
-            else:
-                style.string = css_content
-
-        # Add meta charset
-        if not soup.find('meta', charset=True):
-            meta = soup.new_tag('meta')
-            meta['charset'] = 'utf-8'
-            soup.head.insert(0, meta)
-
-        # Add archive timestamp
-        timestamp_comment = soup.new_tag('div')
-        timestamp_comment['style'] = 'position:fixed;top:0;left:0;background:#fff;padding:5px;font-size:12px;'
-        timestamp_comment.string = f'Archived on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
-        soup.body.insert(0, timestamp_comment)
-
-        # Save the modified HTML
-        with open(f"{output_path}.html", 'w', encoding='utf-8') as f:
-            f.write(str(soup))
-
-    except Exception as e:
-        print(f"Error saving webpage: {e}")
-        raise
-
-def archive_website(url, folder_path):
-    """Archive a website to a single self-contained HTML file."""
-    try:
-        archive_dir = folder_path / "assets" / "sites"  # Use absolute path based on folder_path
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        session = requests.Session()
-        session.headers.update(headers)
-
-        response = session.get(url)
-        if not response.ok:
-            print("Failed to fetch main page for archiving.")
-            return None
-
-        soup = BeautifulSoup(response.text, 'html.parser')
-        title = soup.title.string.strip() if soup.title else "Untitled"
-        domain = urlparse(url).netloc
-
-        timestamp = datetime.now().strftime("%Y_%m_%d_%H%M%S")
-        display_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        safe_title = re.sub(r'[^\w\-_]', '_', title)
-        base_filename = f"{timestamp}_{safe_title}-{domain}"
-
-        # Inline all resources
-        final_html = inline_all_resources(url, response.text)
-
-        # Insert archive timestamp if not already present
-        soup_final = BeautifulSoup(final_html, 'html.parser')
-        if soup_final.body:
-            timestamp_comment = soup_final.new_tag('div')
-            timestamp_comment['style'] = 'position:fixed;top:0;left:0;background:#fff;padding:5px;font-size:12px;'
-            timestamp_comment.string = f'Archived on {display_timestamp}'
-            soup_final.body.insert(0, timestamp_comment)
-        final_html = str(soup_final)
-
-        # Save HTML file directly in the archive_dir
-        html_filename = f"{base_filename}.html"
-        html_path = archive_dir / html_filename
-        with open(html_path, 'w', encoding='utf-8') as f:
-            f.write(final_html)
-
-        # Create tags file directly in the archive_dir
-        tags_filename = f"{base_filename}.tags"
-        tags_path = archive_dir / tags_filename
-
-        # Extract meta tags:
-        description = None
-        keywords = None
-        for meta in soup.find_all('meta'):
-            if meta.get('name', '').lower() == 'description':
-                description = meta.get('content', '')
-            elif meta.get('name', '').lower() == 'keywords':
-                keywords = meta.get('content', '')
-
-        if not description:
-            first_p = soup.find('p')
-            if first_p:
-                description = first_p.get_text().strip()[:200] + '...'
-
-        tags_content = (
-            f"URL: {url}\n"
-            f"Title: {soup.title.string.strip() if soup.title else 'No title'}\n"
-            f"Timestamp: {datetime.now().isoformat()}\n"
-            f"Keywords: {keywords if keywords else 'No keywords found'}\n"
-            f"Description: {description if description else 'No description found'}\n"
-        )
-        tags_path.write_text(tags_content, encoding='utf-8')
-
-        return {
-            'html': f'<div class="archived-link">'
-                    f'<a href="{url}">{domain}</a><br/>'
-                    f'<span class="archive-reference">'
-                    f'<a href="/assets/sites/{html_filename}" target="_blank">site archive [{display_timestamp}]</a>'
-                    f'</span>'
-                    f'</div>',
-            'markdown': f"[{domain} - [{display_timestamp}]](/assets/sites/{html_filename})"
-        }
-    except Exception as e:
-        print(f"Error saving webpage: {e}")
-        return None
-    
-async def get_page_title(url: str) -> str:
-   """Get the title of a webpage"""
-   try:
-       response = requests.get(url)
-       soup = BeautifulSoup(response.text, 'html.parser')
-       return soup.title.string or "Untitled"
-   except:
-       return "Untitled"
 
 ###############################################################################
 # Main Entry Point
