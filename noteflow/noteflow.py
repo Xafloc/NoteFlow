@@ -3676,29 +3676,29 @@ HTML_TEMPLATE = """
                     <button id="saveNoteButton" class="save-note-button" onclick="addNote()">Save Note</button>
                 </div>
                 <textarea id="noteContent" placeholder="Create note in MARKDOWN format... [Ctrl+Enter to save]
-Drag & Drop images/files to upload...
-Start Links with + to archive websites (e.g., +https://www.google.com)
+Drag & Drop images/files to upload.
 
-# Scroll down for Markdown Examples
-- [ ] Tasks
-- Bullets
-    - Sub-bullets
-- **Bold** and *italic* and ~~strikethrough~~
-- Links: [Link text](https://example.com)
-- Images: ![Alt text](image.jpg)
-- Blockquotes: > This is a blockquote.
-- Math: $E=mc^2$ (inline) or
-$$ 
-f(x) = x^2 
-$$
-- Code: `inline code` or ```python
-print('Hello, World!')
-```
+NoteFlow sigils (expanded at save time):
+  +https://example.com         Archive the page locally as self-contained HTML
+  +file:src/foo.py#10-25       Embed those lines as a fenced code block
+
+Tasks (filterable via the `noteflow tasks` CLI and the global tasks page):
+- [ ] Plain task
+- [ ] !p1 @2026-05-31 #release    Priority (1-3), due date, and #tag tokens
+
+Markdown basics:
+- Headers: # H1 / ## H2 / ### H3
+- **bold** / *italic* / ~~strikethrough~~ / inline code in backticks
+- Lists: '- bullet' or '1. numbered'; indent two spaces for sub-items
+- Links: [text](https://example.com)   Images: ![alt](image.jpg)
+- Blockquotes: > like this
 - Tables:
-| Column 1 | Column 2 |
-|----------|----------|
-| Data 1 | Data 2 |
-- 2 spaces after a line to create a line break OR extra line between paragraphs"></textarea>
+    | Column 1 | Column 2 |
+    |----------|----------|
+    | a        | b        |
+- Code blocks: triple-backtick fences, optionally with a language hint
+- Math: single dollar signs for inline, double dollar signs for block (MathJax)
+- Press / anywhere to focus the search box."></textarea>
             </div>
             <div id="notesContainer" class="notes-container"></div>
         </div>
