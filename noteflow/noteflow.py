@@ -1636,7 +1636,7 @@ THEMED_STYLES = """
             margin-top: 0px;
             margin-left: 16px;
             box-sizing: border-box;
-            font-size: 0.7rem;
+            font-size: calc(0.7rem * var(--font-scale-links, 1));
             min-height: 75px;
         }}
         .links-box a {{
@@ -1842,7 +1842,7 @@ THEMED_STYLES = """
             scroll-margin-top: 100px;
         }}
         .markdown-body {{
-            font-size: 0.9rem;
+            font-size: calc(0.9rem * var(--font-scale-notes, 1));
         }}
         .markdown-body ul {{
             list-style-type: disc;
@@ -1965,9 +1965,14 @@ THEMED_STYLES = """
             padding-top: 2px;
             word-break: break-word;
             white-space: pre-wrap;
-            font-size: 0.7rem;
+            font-size: calc(0.7rem * var(--font-scale-tasks, 1));
             color: {colors[text_color]} !important;
             text-decoration: none;
+        }}
+        /* Tasks rendered into #activeTasks come from updateActiveTasks() —
+           they use <label> elements, not .task-text. Scale them too. */
+        #activeTasks label {{
+            font-size: calc(0.75rem * var(--font-scale-tasks, 1));
         }}
         #activeTasks .task-text:hover {{
             color: {colors[accent]} !important;
@@ -2141,9 +2146,10 @@ THEMED_STYLES = """
             margin: 10px auto;
         }}
         /* ---- Right-edge tab strip + unified side panel ----------------- */
+        /* Tabs anchored low-right (admin panel's old spot), stacked upward. */
         #rightTabs {{
-            position: fixed; right: 0; top: 50%; transform: translateY(-50%);
-            display: flex; flex-direction: column; gap: 6px;
+            position: fixed; right: 0; bottom: 30px;
+            display: flex; flex-direction: column-reverse; gap: 6px;
             z-index: 1001;
         }}
         #rightTabs button {{
@@ -2163,6 +2169,8 @@ THEMED_STYLES = """
             background: {colors[accent]};
             color: {colors[background]};
         }}
+        /* Slide-in side panel. Display flex always (so children compute
+           sizes), with transform pushing it off-screen when closed. */
         #sidePanel {{
             position: fixed; right: 0; top: 0; bottom: 0; width: 460px;
             background: {colors[background]};
@@ -2170,9 +2178,15 @@ THEMED_STYLES = """
             box-shadow: -2px 0 14px rgba(0,0,0,0.5);
             border-left: 1px solid #555; z-index: 1000;
             font-family: 'space_monoregular', monospace;
-            display: none;
+            display: flex; flex-direction: column;
+            transform: translateX(100%);
+            transition: transform 0.22s ease-out;
+            visibility: hidden;
         }}
-        #sidePanel.open {{ display: flex; flex-direction: column; }}
+        #sidePanel.open {{
+            transform: translateX(0);
+            visibility: visible;
+        }}
         #sidePanel header {{
             padding: 10px 14px; background: {colors[box_background]};
             display: flex; justify-content: space-between; align-items: center;
@@ -2370,13 +2384,14 @@ HTML_TEMPLATE = """
     <style>
         """ + FONT_FACES + """
         <!-- THEME_STYLES -->
-        /* Per-section font scaling (admin panel adjusts these) */
+        /* Per-section font scaling (admin panel adjusts these).
+           The variables are applied at the *descendant* level where the
+           original rules set explicit font-sizes; setting them only on
+           the container has no effect because each child re-declares
+           its own size. */
         :root {
             <!-- FONT_SCALE_VARS -->
         }
-        #notesContainer { font-size: calc(1rem * var(--font-scale-notes, 1)); }
-        #activeTasks { font-size: calc(0.85rem * var(--font-scale-tasks, 1)); }
-        #linksSection { font-size: calc(0.7rem * var(--font-scale-links, 1)); }
         /* Local search panel */
         .search-box {
             background: var(--box-bg, #26292c);
