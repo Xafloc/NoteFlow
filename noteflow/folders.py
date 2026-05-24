@@ -63,8 +63,12 @@ NOTE_HEADER_RE = re.compile(r'^## (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\s+-\s
 
 
 def get_db_path() -> Path:
-    """Return the SQLite DB path, creating its parent if needed."""
-    config_dir = Path(platformdirs.user_config_dir("noteflow"))
+    """Return the SQLite DB path, creating its parent if needed.
+
+    Uses the Python-specific config dir so we don't share tasks.db with
+    the Go rewrite (noteflow-go) when both are installed.
+    """
+    config_dir = Path(platformdirs.user_config_dir("noteflow-py"))
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir / "tasks.db"
 
