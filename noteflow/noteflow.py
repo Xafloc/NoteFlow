@@ -29,6 +29,7 @@ import time
 from mdit_py_plugins.dollarmath import dollarmath_plugin
 
 from . import archiver
+from . import folders as folders_module
 
 ###############################################################################
 # Constants & Configuration
@@ -1266,6 +1267,62 @@ async def search_notes(request: Request, q: str = ""):
         })
     return {"query": query, "matches": matches}
 
+###############################################################################
+# Cross-folder routes (global tasks page, registry, global search)
+###############################################################################
+@app.get("/global-tasks", response_class=HTMLResponse)
+async def global_tasks_page():
+    return HTMLResponse(folders_module.GLOBAL_TASKS_HTML)
+
+@app.get("/api/global-tasks")
+async def api_global_tasks(include_done: int = 0):
+    return folder_registry.get_all_tasks(include_done=bool(include_done))
+
+@app.post("/api/global-tasks/{task_id}/toggle")
+async def api_toggle_global_task(task_id: int):
+    result = folder_registry.toggle_task(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return result
+
+@app.get("/api/global-folders")
+async def api_global_folders():
+    return folder_registry.list_active()
+
+@app.post("/api/global-folders/add")
+async def api_add_folder(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    path = (body or {}).get("path") if isinstance(body, dict) else None
+    if not path:
+        raise HTTPException(status_code=400, detail="Expected {'path': '...'}")
+    p = Path(path).expanduser()
+    if not p.exists() or not p.is_dir():
+        raise HTTPException(status_code=400, detail=f"Folder does not exist: {path}")
+    return folder_registry.add_folder(p)
+
+@app.post("/api/global-folders/{folder_id}/forget")
+async def api_forget_folder(folder_id: int):
+    if not folder_registry.forget_folder(folder_id):
+        raise HTTPException(status_code=404, detail="Folder not found")
+    return {"status": "success"}
+
+@app.post("/api/global-folders/{folder_id}/sync")
+async def api_sync_folder(folder_id: int):
+    n = folder_registry.sync_folder(folder_id)
+    return {"status": "success", "task_count": n}
+
+@app.post("/api/global-sync")
+async def api_sync_all():
+    n = folder_registry.sync_all()
+    return {"status": "success", "task_count": n}
+
+@app.get("/api/search/global")
+async def api_search_global(q: str = ""):
+    return {"query": q, "results": folder_registry.search_all(q)}
+
 @app.post("/api/upload-file")
 async def upload_file(request: Request, file: UploadFile = File(...)):
     # Get file extension and MIME type
@@ -2186,6 +2243,18 @@ HTML_TEMPLATE = """
         }
         .font-scales input[type="range"] { flex: 1; }
         .font-scales .val { width: 30px; text-align: right; font-family: monospace; font-size: 0.65rem; }
+        .global-tasks-link {
+            font-size: 0.7rem;
+            text-align: right;
+            margin: 4px 0 8px 0;
+            padding-right: 4px;
+        }
+        .global-tasks-link a {
+            color: var(--accent, #df8a3e);
+            text-decoration: none;
+            opacity: 0.75;
+        }
+        .global-tasks-link a:hover { opacity: 1; text-decoration: underline; }
     </style>
     <script>
         const CURRENT_THEME = '""" + CURRENT_THEME + """';
@@ -2859,6 +2928,9 @@ print('Hello, World!')
             <div id="activeTasks" class="task-box">
                 <!-- Task items will be dynamically inserted here -->
             </div>
+            <div class="global-tasks-link">
+                <a href="/global-tasks" target="_blank">global tasks &rarr;</a>
+            </div>
 
             <!-- Links Section -->
             <div class="section-container">
@@ -2957,7 +3029,7 @@ def _open_browser_when_ready(url: str, delay: float = 1.0):
 
 def main():
     import uvicorn
-    global note_manager
+    global note_manager, folder_registry
 
     args = _build_arg_parser().parse_args()
 
@@ -2971,7 +3043,13 @@ def main():
         note_manager = NoteManager(working_dir)
         app.state.folder_path = working_dir
 
-        # Honor --port if given, otherwise scan from 8000.
+        # Cross-folder registry: auto-register the active folder and start
+        # the background sync ticker. Folders persist across runs in
+        # ~/.config/noteflow/tasks.db.
+        folder_registry = folders_module.FolderRegistry()
+        folder_registry.add_folder(working_dir)
+        folder_registry.start_background_sync()
+
         port = find_free_port(args.port) if args.port else find_free_port()
         set_app_port(port)
 
