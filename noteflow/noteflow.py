@@ -30,6 +30,7 @@ from mdit_py_plugins.dollarmath import dollarmath_plugin
 
 from . import archiver
 from . import folders as folders_module
+from . import ai as ai_module
 
 ###############################################################################
 # Constants & Configuration
@@ -226,6 +227,7 @@ def load_config():
     default_config = {
         "theme": "dark-orange",
         "font_scales": _default_font_scales(),
+        "ai": dict(ai_module.DEFAULT_AI_CONFIG),
     }
 
     try:
@@ -240,6 +242,8 @@ def load_config():
             config['font_scales'] = {
                 s: _clamp_font_scale(scales.get(s, 1.0)) for s in FONT_SCALE_SECTIONS
             }
+            # Normalize AI block — fill in any missing keys.
+            config['ai'] = ai_module.merge_ai_config(config)
             with open(config_file, 'w') as f:
                 json.dump(config, f, indent=4)
             return config
@@ -267,6 +271,7 @@ CURRENT_THEME = config.get('theme', 'light-blue')
 if CURRENT_THEME not in THEMES:
     CURRENT_THEME = 'dark-orange'
 FONT_SCALES = config.get('font_scales') or _default_font_scales()
+AI_CONFIG = ai_module.merge_ai_config(config)
 
 def get_git_context(folder_path: Path) -> Dict:
     """Read .git/HEAD directly to detect repo status without shelling out.
@@ -1323,6 +1328,82 @@ async def api_sync_all():
 async def api_search_global(q: str = ""):
     return {"query": q, "results": folder_registry.search_all(q)}
 
+###############################################################################
+# AI assist routes
+###############################################################################
+@app.get("/api/ai/config")
+async def api_ai_config_get():
+    return ai_module.sanitized_view(AI_CONFIG)
+
+@app.post("/api/ai/config")
+async def api_ai_config_set(request: Request):
+    global AI_CONFIG
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    AI_CONFIG = ai_module.apply_update(AI_CONFIG, body or {})
+    cfg = load_config()
+    cfg['ai'] = AI_CONFIG
+    save_config(cfg)
+    return ai_module.sanitized_view(AI_CONFIG)
+
+@app.post("/api/ai/ask")
+async def api_ai_ask(request: Request):
+    from fastapi.responses import StreamingResponse
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    user_messages = body.get("messages") if isinstance(body, dict) else None
+    if not isinstance(user_messages, list) or not user_messages:
+        raise HTTPException(status_code=400, detail="Expected {'messages': [...]}")
+    context = (body or {}).get("context") or AI_CONFIG.get("default_context", "all")
+    folder_path = request.app.state.folder_path
+    messages = ai_module.build_messages(user_messages, context, folder_path)
+    return StreamingResponse(
+        ai_module.stream_chat(AI_CONFIG, messages),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+@app.post("/api/ai/render")
+async def api_ai_render(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    md = (body or {}).get("markdown", "")
+    return {"html": parse_markdown(md)}
+
+@app.get("/api/ai/history")
+async def api_ai_history_list(request: Request):
+    history = ai_module.AIHistory(request.app.state.folder_path)
+    return history.list_entries()
+
+@app.post("/api/ai/history")
+async def api_ai_history_add(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict) or not body.get("question") or not body.get("response"):
+        raise HTTPException(status_code=400, detail="Expected {'question': '...', 'response': '...'}")
+    history = ai_module.AIHistory(request.app.state.folder_path)
+    return history.append_entry(
+        question=body["question"],
+        response=body["response"],
+        model=body.get("model", AI_CONFIG.get("model", "")),
+        context=body.get("context", AI_CONFIG.get("default_context", "all")),
+    )
+
+@app.delete("/api/ai/history/{entry_id}")
+async def api_ai_history_delete(entry_id: str, request: Request):
+    history = ai_module.AIHistory(request.app.state.folder_path)
+    if not history.delete_entry(entry_id):
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return {"status": "success"}
+
 @app.post("/api/upload-file")
 async def upload_file(request: Request, file: UploadFile = File(...)):
     # Get file extension and MIME type
@@ -2255,6 +2336,104 @@ HTML_TEMPLATE = """
             opacity: 0.75;
         }
         .global-tasks-link a:hover { opacity: 1; text-decoration: underline; }
+
+        /* AI assist slideout */
+        #aiToggle {
+            position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+            background: #26292c; color: var(--accent, #df8a3e);
+            border: 1px solid #555; border-right: none;
+            padding: 12px 6px; cursor: pointer;
+            writing-mode: vertical-rl; transform-origin: center;
+            font-family: monospace; font-size: 0.7rem;
+            border-radius: 6px 0 0 6px; letter-spacing: 1px; z-index: 999;
+        }
+        #aiToggle:hover { background: #3a3f47; }
+        #aiPanel {
+            position: fixed; right: 0; top: 0; bottom: 0; width: 460px;
+            background: #1c1f22; color: #c0c0c0; box-shadow: -2px 0 14px rgba(0,0,0,0.5);
+            border-left: 1px solid #555; transform: translateX(100%);
+            transition: transform 0.2s ease; z-index: 1000;
+            display: flex; flex-direction: column; font-family: monospace;
+        }
+        #aiPanel.open { transform: translateX(0); }
+        #aiPanel header {
+            padding: 8px 12px; background: #26292c; display: flex;
+            justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #555;
+        }
+        #aiPanel header h2 { margin: 0; font-size: 0.85rem; color: var(--accent, #df8a3e); }
+        #aiPanel .close { cursor: pointer; opacity: 0.7; font-size: 1rem; }
+        #aiPanel .tabs { display: flex; border-bottom: 1px solid #555; }
+        #aiPanel .tabs button {
+            flex: 1; background: #1c1f22; color: #c0c0c0; border: none;
+            padding: 6px; font-family: inherit; font-size: 0.7rem; cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        #aiPanel .tabs button.active {
+            border-bottom-color: var(--accent, #df8a3e);
+            color: var(--accent, #df8a3e);
+        }
+        #aiPanel .pane { display: none; flex: 1; overflow-y: auto; padding: 10px; }
+        #aiPanel .pane.active { display: flex; flex-direction: column; }
+        /* Chat pane */
+        #aiChatLog {
+            flex: 1; overflow-y: auto; padding-bottom: 8px;
+            font-size: 0.75rem; line-height: 1.45;
+        }
+        #aiChatLog .msg { margin-bottom: 10px; padding: 6px 8px; border-radius: 4px; }
+        #aiChatLog .msg.user { background: #2a2e33; border-left: 3px solid var(--accent, #df8a3e); }
+        #aiChatLog .msg.assistant { background: #1f2226; border-left: 3px solid #4a90e2; }
+        #aiChatLog .msg.assistant .actions {
+            margin-top: 6px; display: flex; gap: 6px; font-size: 0.65rem;
+        }
+        #aiChatLog .msg.assistant .actions button {
+            background: #26292c; color: #ccc; border: 1px solid #555;
+            padding: 2px 8px; cursor: pointer; border-radius: 3px;
+            font-family: inherit; font-size: 0.65rem;
+        }
+        #aiChatLog .msg.assistant .actions button:hover { background: #3a3f47; }
+        #aiChatLog .msg.error { background: rgba(180,40,40,0.18); border-left: 3px solid #c33; }
+        #aiInputRow { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+        #aiInputRow textarea {
+            background: #26292c; color: #c0c0c0; border: 1px solid #555;
+            padding: 6px; font-family: inherit; font-size: 0.75rem;
+            resize: vertical; min-height: 60px;
+        }
+        #aiInputRow .controls { display: flex; gap: 6px; align-items: center; }
+        #aiInputRow .controls select, #aiInputRow .controls button {
+            background: #26292c; color: #ccc; border: 1px solid #555;
+            padding: 4px 8px; font-family: inherit; font-size: 0.7rem; cursor: pointer;
+        }
+        #aiInputRow .controls button.send {
+            color: var(--accent, #df8a3e); font-weight: bold;
+        }
+        /* Settings pane */
+        #aiSettings label { display: block; margin: 8px 0 2px; font-size: 0.7rem; opacity: 0.75; }
+        #aiSettings input, #aiSettings select {
+            width: 100%; background: #26292c; color: #c0c0c0; border: 1px solid #555;
+            padding: 4px 6px; font-family: inherit; font-size: 0.75rem;
+            box-sizing: border-box;
+        }
+        #aiSettings .save {
+            margin-top: 12px; background: #26292c; color: var(--accent, #df8a3e);
+            border: 1px solid #555; padding: 6px 14px; cursor: pointer;
+            font-family: inherit; font-size: 0.75rem;
+        }
+        #aiSettings .save:hover { background: #3a3f47; }
+        #aiSettings .key-status { font-size: 0.65rem; opacity: 0.6; margin-top: 2px; }
+        /* History pane */
+        #aiHistoryList .entry {
+            padding: 6px; border-bottom: 1px solid #2a2e33; font-size: 0.7rem;
+        }
+        #aiHistoryList .entry .meta {
+            display: flex; justify-content: space-between; opacity: 0.7;
+            font-size: 0.6rem; margin-bottom: 4px;
+        }
+        #aiHistoryList .entry .meta a {
+            color: #c33; cursor: pointer; text-decoration: none;
+        }
+        #aiHistoryList .entry .q { font-weight: bold; margin-bottom: 4px; }
+        #aiHistoryList .entry .body { opacity: 0.85; max-height: 200px; overflow-y: auto; }
     </style>
     <script>
         const CURRENT_THEME = '""" + CURRENT_THEME + """';
@@ -2691,6 +2870,229 @@ HTML_TEMPLATE = """
             }
         }
 
+        // ---- AI assist slideout --------------------------------------------
+        let _aiMessages = [];   // [{role, content}] for the current conversation
+        let _aiStreaming = false;
+
+        function toggleAIPanel() {
+            const panel = document.getElementById('aiPanel');
+            const opening = !panel.classList.contains('open');
+            panel.classList.toggle('open');
+            panel.setAttribute('aria-hidden', opening ? 'false' : 'true');
+            if (opening) {
+                loadAISettings();
+                loadAIHistory();
+                document.getElementById('aiInput').focus();
+            }
+        }
+
+        function switchAITab(name) {
+            document.querySelectorAll('#aiPanel .tabs button').forEach((b) => {
+                b.classList.toggle('active', b.dataset.tab === name);
+            });
+            document.querySelectorAll('#aiPanel .pane').forEach((p) => {
+                p.classList.remove('active');
+            });
+            const idMap = { chat: 'aiPaneChat', history: 'aiPaneHistory', settings: 'aiPaneSettings' };
+            document.getElementById(idMap[name]).classList.add('active');
+            if (name === 'history') loadAIHistory();
+            if (name === 'settings') loadAISettings();
+        }
+
+        async function loadAISettings() {
+            try {
+                const resp = await fetch('/api/ai/config');
+                const cfg = await resp.json();
+                document.getElementById('aiEndpoint').value = cfg.endpoint || '';
+                document.getElementById('aiModel').value = cfg.model || '';
+                document.getElementById('aiDefaultContext').value = cfg.default_context || 'all';
+                document.getElementById('aiKeyStatus').textContent =
+                    cfg.api_key_set ? 'An API key is currently set.' : 'No API key set yet.';
+                document.getElementById('aiContext').value = cfg.default_context || 'all';
+            } catch (e) { console.error('AI settings load:', e); }
+        }
+
+        async function aiSaveSettings() {
+            const body = {
+                endpoint: document.getElementById('aiEndpoint').value.trim(),
+                model: document.getElementById('aiModel').value.trim(),
+                api_key: document.getElementById('aiApiKey').value,
+                default_context: document.getElementById('aiDefaultContext').value,
+            };
+            try {
+                const resp = await fetch('/api/ai/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                if (resp.ok) {
+                    document.getElementById('aiApiKey').value = '';
+                    await loadAISettings();
+                } else {
+                    alert('Failed to save AI settings');
+                }
+            } catch (e) {
+                console.error('AI save:', e);
+            }
+        }
+
+        function aiAppendMessage(role, contentHtml) {
+            const log = document.getElementById('aiChatLog');
+            const div = document.createElement('div');
+            div.className = 'msg ' + role;
+            div.innerHTML = contentHtml;
+            log.appendChild(div);
+            log.scrollTop = log.scrollHeight;
+            return div;
+        }
+
+        async function aiRenderMarkdown(md) {
+            try {
+                const resp = await fetch('/api/ai/render', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({markdown: md}),
+                });
+                const data = await resp.json();
+                return data.html;
+            } catch (e) {
+                return escapeHtml(md);
+            }
+        }
+
+        function aiNewChat() {
+            _aiMessages = [];
+            document.getElementById('aiChatLog').innerHTML = '';
+            document.getElementById('aiInput').focus();
+        }
+
+        async function aiSend() {
+            if (_aiStreaming) return;
+            const input = document.getElementById('aiInput');
+            const question = input.value.trim();
+            if (!question) return;
+            input.value = '';
+            _aiMessages.push({role: 'user', content: question});
+            aiAppendMessage('user', '<b>You</b><br>' + escapeHtml(question));
+
+            const placeholder = aiAppendMessage('assistant', '<b>AI</b> <em style="opacity:0.5;">…thinking…</em>');
+            const ctx = document.getElementById('aiContext').value;
+
+            _aiStreaming = true;
+            let accumulated = '';
+            try {
+                const resp = await fetch('/api/ai/ask', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({messages: _aiMessages, context: ctx}),
+                });
+                if (!resp.ok || !resp.body) {
+                    placeholder.classList.add('error');
+                    placeholder.innerHTML = '<b>AI</b> request failed (HTTP ' + resp.status + ')';
+                    _aiStreaming = false;
+                    return;
+                }
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buf = '';
+                let errored = false;
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    buf += decoder.decode(value, {stream: true});
+                    const parts = buf.split('\n\n');
+                    buf = parts.pop();
+                    for (const part of parts) {
+                        const trimmed = part.trim();
+                        if (!trimmed.startsWith('data:')) continue;
+                        let data;
+                        try { data = JSON.parse(trimmed.slice(5).trim()); }
+                        catch (e) { continue; }
+                        if (data.error) {
+                            errored = true;
+                            placeholder.classList.add('error');
+                            placeholder.innerHTML = '<b>AI</b><br>' + escapeHtml(data.error);
+                        } else if (data.text) {
+                            accumulated += data.text;
+                            placeholder.innerHTML = '<b>AI</b><br><pre style="white-space:pre-wrap;font-family:inherit;margin:0;">' + escapeHtml(accumulated) + '</pre>';
+                            placeholder.scrollIntoView({block: 'end'});
+                        }
+                    }
+                }
+                if (!errored && accumulated) {
+                    // Re-render the final text as proper markdown + add save/copy actions.
+                    const html = await aiRenderMarkdown(accumulated);
+                    placeholder.innerHTML =
+                        '<b>AI</b><div class="markdown-body">' + html + '</div>' +
+                        '<div class="actions">' +
+                            '<button onclick="aiSaveEntry(' + JSON.stringify(question).replace(/"/g, '&quot;') +
+                              ', ' + JSON.stringify(accumulated).replace(/"/g, '&quot;') + ')">Save to history</button>' +
+                            '<button onclick="aiCopyText(this, ' + JSON.stringify(accumulated).replace(/"/g, '&quot;') + ')">Copy</button>' +
+                        '</div>';
+                    if (window.typeset) await typeset(placeholder);
+                    _aiMessages.push({role: 'assistant', content: accumulated});
+                }
+            } catch (e) {
+                placeholder.classList.add('error');
+                placeholder.innerHTML = '<b>AI</b> error: ' + escapeHtml(String(e));
+            } finally {
+                _aiStreaming = false;
+            }
+        }
+
+        async function aiSaveEntry(question, response) {
+            try {
+                await fetch('/api/ai/history', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        question: question,
+                        response: response,
+                        context: document.getElementById('aiContext').value,
+                    }),
+                });
+                loadAIHistory();
+            } catch (e) { console.error('AI save:', e); }
+        }
+
+        async function aiCopyText(btn, text) {
+            await copyToClipboard(text, btn);
+            const orig = btn.textContent;
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = orig; }, 900);
+        }
+
+        async function loadAIHistory() {
+            try {
+                const resp = await fetch('/api/ai/history');
+                const entries = await resp.json();
+                const list = document.getElementById('aiHistoryList');
+                if (!entries.length) {
+                    list.innerHTML = '<div class="entry" style="opacity:0.5;">No saved entries.</div>';
+                    return;
+                }
+                const renderedBodies = await Promise.all(entries.map(e => aiRenderMarkdown(e.response)));
+                list.innerHTML = entries.map((e, i) => (
+                    '<div class="entry">' +
+                      '<div class="meta">' +
+                        '<span>' + escapeHtml(e.timestamp) + ' · ' + escapeHtml(e.model || 'unknown') + '</span>' +
+                        '<a onclick="aiDeleteEntry(' + JSON.stringify(e.id).replace(/"/g, '&quot;') + ')">delete</a>' +
+                      '</div>' +
+                      '<div class="q">' + escapeHtml(e.question) + '</div>' +
+                      '<div class="body markdown-body">' + renderedBodies[i] + '</div>' +
+                    '</div>'
+                )).join('');
+            } catch (e) { console.error('AI history:', e); }
+        }
+
+        async function aiDeleteEntry(id) {
+            if (!confirm('Delete this entry?')) return;
+            try {
+                await fetch('/api/ai/history/' + encodeURIComponent(id), {method: 'DELETE'});
+                loadAIHistory();
+            } catch (e) { console.error('AI delete:', e); }
+        }
+
         // Copy text to clipboard with brief visual feedback on the element.
         async function copyToClipboard(text, element) {
             try {
@@ -2793,6 +3195,17 @@ HTML_TEMPLATE = """
             // Admin panel + header niceties
             await loadFontScales();
             await loadGitContext();
+
+            // AI assist Ctrl+Enter to send
+            const aiInput = document.getElementById('aiInput');
+            if (aiInput) {
+                aiInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        aiSend();
+                    }
+                });
+            }
 
             // Get the textarea element
             const noteContent = document.getElementById('noteContent');
@@ -2955,6 +3368,59 @@ print('Hello, World!')
             <div class="loading-text">Archiving website...</div>
         </div>
     </div>
+
+    <!-- AI Assist Slideout -->
+    <button id="aiToggle" onclick="toggleAIPanel()">AI assist</button>
+    <aside id="aiPanel" aria-hidden="true">
+        <header>
+            <h2>AI assist</h2>
+            <span class="close" onclick="toggleAIPanel()">&times;</span>
+        </header>
+        <div class="tabs">
+            <button data-tab="chat" class="active" onclick="switchAITab('chat')">Chat</button>
+            <button data-tab="history" onclick="switchAITab('history')">History</button>
+            <button data-tab="settings" onclick="switchAITab('settings')">Settings</button>
+        </div>
+        <div id="aiPaneChat" class="pane active">
+            <div id="aiChatLog"></div>
+            <div id="aiInputRow">
+                <textarea id="aiInput" placeholder="Ask anything about your notes…  [Ctrl+Enter to send]"></textarea>
+                <div class="controls">
+                    <label style="font-size:0.65rem;opacity:0.7;">context:</label>
+                    <select id="aiContext">
+                        <option value="all">all notes</option>
+                        <option value="200">last 200 lines</option>
+                        <option value="100">last 100 lines</option>
+                        <option value="50">last 50 lines</option>
+                    </select>
+                    <button onclick="aiNewChat()">New chat</button>
+                    <button class="send" onclick="aiSend()">Send</button>
+                </div>
+            </div>
+        </div>
+        <div id="aiPaneHistory" class="pane">
+            <div id="aiHistoryList"></div>
+        </div>
+        <div id="aiPaneSettings" class="pane">
+            <div id="aiSettings">
+                <label>Endpoint (OpenAI-compatible /v1/chat/completions)</label>
+                <input type="text" id="aiEndpoint" placeholder="https://api.openai.com/v1/chat/completions">
+                <label>Model</label>
+                <input type="text" id="aiModel" placeholder="gpt-4o-mini">
+                <label>API key</label>
+                <input type="password" id="aiApiKey" placeholder="Leave blank to keep existing">
+                <div class="key-status" id="aiKeyStatus"></div>
+                <label>Default context</label>
+                <select id="aiDefaultContext">
+                    <option value="all">all notes</option>
+                    <option value="200">last 200 lines</option>
+                    <option value="100">last 100 lines</option>
+                    <option value="50">last 50 lines</option>
+                </select>
+                <button class="save" onclick="aiSaveSettings()">Save settings</button>
+            </div>
+        </div>
+    </aside>
 
     <!-- Admin Panel -->
     <div class="admin-panel">
