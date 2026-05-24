@@ -3335,7 +3335,7 @@ HTML_TEMPLATE = """
                     placeholder.innerHTML =
                         '<b>AI</b><div class="markdown-body">' + html + '</div>' +
                         '<div class="actions">' +
-                            '<button onclick="aiSaveEntry(' + JSON.stringify(question).replace(/"/g, '&quot;') +
+                            '<button onclick="aiSaveEntry(this, ' + JSON.stringify(question).replace(/"/g, '&quot;') +
                               ', ' + JSON.stringify(accumulated).replace(/"/g, '&quot;') + ')">Save to history</button>' +
                             '<button onclick="aiCopyText(this, ' + JSON.stringify(accumulated).replace(/"/g, '&quot;') + ')">Copy</button>' +
                         '</div>';
@@ -3362,9 +3362,20 @@ HTML_TEMPLATE = """
             }
         }
 
-        async function aiSaveEntry(question, response) {
+        async function aiSaveEntry(btn, question, response) {
+            // Optional first arg — older callers pass (question, response).
+            if (typeof btn === 'string') {
+                response = question;
+                question = btn;
+                btn = null;
+            }
+            const orig = btn ? btn.textContent : null;
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Saving…';
+            }
             try {
-                await fetch('/api/ai/history', {
+                const resp = await fetch('/api/ai/history', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
@@ -3373,8 +3384,31 @@ HTML_TEMPLATE = """
                         context: document.getElementById('aiContext').value,
                     }),
                 });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                if (btn) {
+                    btn.textContent = 'Saved ✓';
+                    btn.style.color = 'var(--accent, #df8a3e)';
+                    setTimeout(() => {
+                        if (!btn) return;
+                        btn.textContent = orig;
+                        btn.style.color = '';
+                        btn.disabled = false;
+                    }, 1400);
+                }
                 loadAIHistory();
-            } catch (e) { console.error('AI save:', e); }
+            } catch (e) {
+                console.error('AI save:', e);
+                if (btn) {
+                    btn.textContent = 'Save failed';
+                    btn.style.color = '#c33';
+                    setTimeout(() => {
+                        if (!btn) return;
+                        btn.textContent = orig;
+                        btn.style.color = '';
+                        btn.disabled = false;
+                    }, 2000);
+                }
+            }
         }
 
         async function aiCopyText(btn, text) {
@@ -3472,14 +3506,25 @@ HTML_TEMPLATE = """
             const notesContainer = document.getElementById('notesContainer');
             await typeset(notesContainer);
 
-            // ESC closes the side panel from anywhere on the page.
+            // Global keyboard shortcuts.
             document.addEventListener('keydown', (e) => {
+                // ESC closes the side panel from anywhere on the page.
                 if (e.key === 'Escape') {
                     const panel = document.getElementById('sidePanel');
                     if (panel && panel.classList.contains('open')) {
-                        // Don't steal Escape from the search box's clear handler.
                         if (document.activeElement && document.activeElement.id === 'searchInput') return;
                         closeSidePanel();
+                    }
+                }
+                // `/` focuses the search box (skip when typing somewhere).
+                if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                    const tag = document.activeElement && document.activeElement.tagName;
+                    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+                    const search = document.getElementById('searchInput');
+                    if (search) {
+                        e.preventDefault();
+                        search.focus();
+                        search.select();
                     }
                 }
             });
