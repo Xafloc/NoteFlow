@@ -18,6 +18,8 @@ import base64
 import re
 import time
 import mimetypes
+import shutil
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent.futures
 from datetime import datetime
@@ -330,10 +332,83 @@ def inline_all_resources(url: str, source_html: str) -> str:
 
 
 ###############################################################################
+# External archiver detection
+###############################################################################
+# Preference order: monolith first (most actively maintained, best fidelity
+# on modern pages), then obelisk (exact parity with noteflow-go), then we
+# fall back to the in-process BeautifulSoup pipeline above.
+EXTERNAL_ARCHIVERS = ("monolith", "obelisk")
+
+
+def _find_external_archiver() -> Optional[str]:
+    """Return the name of the first available external archiver, or None."""
+    for binary in EXTERNAL_ARCHIVERS:
+        if shutil.which(binary):
+            return binary
+    return None
+
+
+def _run_external_archiver(binary: str, url: str) -> Optional[str]:
+    """Shell out to monolith/obelisk; return the archived HTML or None.
+
+    Both tools accept (url, -o output) but their flag surfaces differ:
+      - monolith: writes to stdout by default; use `-` or `-o <path>`
+      - obelisk:  needs `-o <path>` and writes the file directly
+    To keep this simple and capture stdout cross-tool, we use `-o -`
+    where supported and stdout for monolith.
+    """
+    try:
+        if binary == "monolith":
+            # monolith writes the archive to stdout by default.
+            # -s silences progress chatter; --no-audio/--no-video skip heavy
+            # media that bloats archives; -t bounds per-request waits.
+            cmd = [
+                binary,
+                "-s",
+                "--no-audio",
+                "--no-video",
+                "-t", "25",
+                url,
+            ]
+        elif binary == "obelisk":
+            # obelisk wants -o; "-" sends to stdout on most builds.
+            cmd = [binary, "-o", "-", url]
+        else:
+            return None
+
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=TOTAL_TIMEOUT + 5,
+            check=False,
+        )
+
+        if proc.returncode != 0:
+            err = proc.stderr.decode('utf-8', errors='replace')[:300]
+            print(f"{binary} returned {proc.returncode}: {err}")
+            return None
+        html = proc.stdout.decode('utf-8', errors='replace')
+        if not html.strip() or "<html" not in html.lower():
+            print(f"{binary} returned empty/non-HTML output")
+            return None
+        return html
+    except subprocess.TimeoutExpired:
+        print(f"{binary} exceeded {TOTAL_TIMEOUT + 5}s timeout — falling back")
+        return None
+    except Exception as e:
+        print(f"{binary} failed: {e}")
+        return None
+
+
+###############################################################################
 # Public entry points
 ###############################################################################
 def archive_website(url: str, folder_path: Path) -> Optional[Dict[str, str]]:
-    """Archive `url` into folder_path/assets/sites/. Returns html/markdown links."""
+    """Archive `url` into folder_path/assets/sites/. Returns html/markdown links.
+
+    Prefers an external archiver (monolith / obelisk) when available; falls
+    back to the in-process BeautifulSoup-based inliner otherwise.
+    """
     try:
         archive_dir = folder_path / "assets" / "sites"
         archive_dir.mkdir(parents=True, exist_ok=True)
@@ -341,6 +416,9 @@ def archive_website(url: str, folder_path: Path) -> Optional[Dict[str, str]]:
         session = requests.Session()
         session.headers.update({'User-Agent': 'Mozilla/5.0'})
 
+        # Always fetch the page once with requests so we can read <title>,
+        # <meta>, etc. for the sidecar metadata file — even if we delegate
+        # the actual archiving to an external tool.
         response = session.get(url, timeout=RESOURCE_TIMEOUT)
         if not response.ok:
             print("Failed to fetch main page for archiving.")
@@ -355,7 +433,15 @@ def archive_website(url: str, folder_path: Path) -> Optional[Dict[str, str]]:
         safe_title = re.sub(r'[^\w\-_]', '_', title)
         base_filename = f"{timestamp}_{safe_title}-{domain}"
 
-        final_html = inline_all_resources(url, response.text)
+        external = _find_external_archiver()
+        final_html = None
+        if external:
+            print(f"archiving with {external}: {url}")
+            final_html = _run_external_archiver(external, url)
+        if final_html is None:
+            if external:
+                print(f"{external} failed — falling back to in-process archiver")
+            final_html = inline_all_resources(url, response.text)
 
         # Stamp the archive with a corner timestamp.
         soup_final = BeautifulSoup(final_html, 'html.parser')
