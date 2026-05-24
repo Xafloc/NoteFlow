@@ -42,7 +42,15 @@ DEFAULT_AI_CONFIG = {
     "model": "gpt-4o-mini",
     "default_context": "all",
 }
-UPSTREAM_TIMEOUT = 300  # seconds — the AI may stream for a while
+# requests timeout is (connect, read). Read applies to each socket read —
+# so if the LLM stops sending tokens for STREAM_IDLE_TIMEOUT, we bail
+# rather than hold the connection open indefinitely. Anyone hitting a
+# legitimately long-running model can bump this; the default favors
+# fast feedback when something's wrong (bad endpoint, wrong model name,
+# Ollama still loading, etc.).
+CONNECT_TIMEOUT = 10
+STREAM_IDLE_TIMEOUT = 45
+UPSTREAM_TIMEOUT = (CONNECT_TIMEOUT, STREAM_IDLE_TIMEOUT)
 
 
 def merge_ai_config(loaded: Dict) -> Dict:
@@ -158,6 +166,7 @@ def stream_chat(ai_cfg: Dict, messages: List[Dict]) -> Iterator[bytes]:
         "messages": messages,
         "stream": True,
     }
+    tokens_yielded = 0
     try:
         with requests.post(
             endpoint,
@@ -168,7 +177,7 @@ def stream_chat(ai_cfg: Dict, messages: List[Dict]) -> Iterator[bytes]:
         ) as resp:
             if not resp.ok:
                 detail = resp.text[:500] if resp.text else f"HTTP {resp.status_code}"
-                yield _sse_error(f"upstream error: {detail}")
+                yield _sse_error(f"upstream HTTP {resp.status_code}: {detail}")
                 yield _sse_done()
                 return
             for raw_line in resp.iter_lines(decode_unicode=True):
@@ -190,13 +199,40 @@ def stream_chat(ai_cfg: Dict, messages: List[Dict]) -> Iterator[bytes]:
                 delta = choices[0].get("delta") or {}
                 text = delta.get("content")
                 if text:
+                    tokens_yielded += 1
                     yield _sse_text(text)
+        if tokens_yielded == 0:
+            # 200 OK + clean close but no token content. Usually means the
+            # upstream returned a non-streaming body, or an empty completion.
+            yield _sse_error(
+                "upstream returned no tokens — endpoint may not support "
+                "streaming responses, or model returned empty content."
+            )
         yield _sse_done()
-    except requests.Timeout:
-        yield _sse_error("upstream request timed out")
+    except requests.exceptions.ConnectTimeout:
+        yield _sse_error(
+            f"could not connect to {endpoint} within {CONNECT_TIMEOUT}s — "
+            "check endpoint URL and that the upstream is reachable."
+        )
+        yield _sse_done()
+    except requests.exceptions.ReadTimeout:
+        if tokens_yielded == 0:
+            yield _sse_error(
+                f"upstream connected but sent no data for {STREAM_IDLE_TIMEOUT}s — "
+                "common with Ollama on first request while it loads a model. "
+                "Try again, or verify the model name."
+            )
+        else:
+            yield _sse_error(
+                f"upstream stopped streaming after {tokens_yielded} tokens "
+                f"({STREAM_IDLE_TIMEOUT}s of silence)."
+            )
+        yield _sse_done()
+    except requests.exceptions.ConnectionError as e:
+        yield _sse_error(f"connection error: {e}")
         yield _sse_done()
     except Exception as e:
-        yield _sse_error(f"upstream proxy error: {e}")
+        yield _sse_error(f"upstream proxy error: {type(e).__name__}: {e}")
         yield _sse_done()
 
 

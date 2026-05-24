@@ -2546,6 +2546,24 @@ HTML_TEMPLATE = """
         }
         #aiChatLog .msg.assistant .actions button:hover { background: #3a3f47; }
         #aiChatLog .msg.error { background: rgba(180,40,40,0.18); border-left: 3px solid #c33; }
+        /* Animated "thinking" pulse — gives the user a visual cue that
+           the placeholder bubble is still live even when no tokens have
+           arrived yet (Ollama loading a model, slow first byte, etc.) */
+        .ai-thinking {
+            display: inline-block;
+            opacity: 0.55;
+            font-style: italic;
+            animation: ai-pulse 1.4s ease-in-out infinite;
+        }
+        .ai-thinking-dots {
+            display: inline-block;
+            min-width: 1.4em;
+            text-align: left;
+        }
+        @keyframes ai-pulse {
+            0%, 100% { opacity: 0.35; }
+            50%      { opacity: 1; }
+        }
         #aiInputRow { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
         #aiInputRow textarea {
             background: #26292c; color: #c0c0c0; border: 1px solid #555;
@@ -3225,6 +3243,24 @@ HTML_TEMPLATE = """
             document.getElementById('aiInput').focus();
         }
 
+        // Live thinking indicator with a tiny in-place spinner so the
+        // user knows the bubble is alive even before any tokens land.
+        function aiThinkingMarkup(seconds) {
+            const dots = '.'.repeat((seconds % 3) + 1);
+            return '<b>AI</b> <span class="ai-thinking">thinking' +
+                   '<span class="ai-thinking-dots">' + dots + '</span></span>' +
+                   ' <span style="opacity:0.45;font-size:0.65rem;margin-left:6px;">' +
+                     seconds + 's</span>';
+        }
+
+        // Module-level handles so aiStop() can interrupt an in-flight request.
+        let _aiAbort = null;
+        let _aiThinkingTimer = null;
+
+        function aiStop() {
+            if (_aiAbort) { try { _aiAbort.abort(); } catch (e) {} }
+        }
+
         async function aiSend() {
             if (_aiStreaming) return;
             const input = document.getElementById('aiInput');
@@ -3234,21 +3270,36 @@ HTML_TEMPLATE = """
             _aiMessages.push({role: 'user', content: question});
             aiAppendMessage('user', '<b>You</b><br>' + escapeHtml(question));
 
-            const placeholder = aiAppendMessage('assistant', '<b>AI</b> <em style="opacity:0.5;">…thinking…</em>');
+            const placeholder = aiAppendMessage('assistant', aiThinkingMarkup(0));
             const ctx = document.getElementById('aiContext').value;
 
+            // Cycle the "thinking..." dots + seconds counter once per second
+            // so the user can see the request hasn't stalled out.
+            let elapsed = 0;
+            _aiThinkingTimer = setInterval(() => {
+                elapsed += 1;
+                if (!_aiStreaming) return;
+                // Only refresh while we're still waiting on the FIRST token —
+                // once tokens arrive we replace the placeholder content anyway.
+                if (placeholder.querySelector('.ai-thinking')) {
+                    placeholder.innerHTML = aiThinkingMarkup(elapsed) +
+                        ' <button onclick="aiStop()" style="margin-left:8px;background:#26292c;color:#c33;border:1px solid #555;padding:1px 8px;font-size:0.65rem;cursor:pointer;border-radius:3px;">stop</button>';
+                }
+            }, 1000);
+
             _aiStreaming = true;
+            _aiAbort = new AbortController();
             let accumulated = '';
             try {
                 const resp = await fetch('/api/ai/ask', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({messages: _aiMessages, context: ctx}),
+                    signal: _aiAbort.signal,
                 });
                 if (!resp.ok || !resp.body) {
                     placeholder.classList.add('error');
                     placeholder.innerHTML = '<b>AI</b> request failed (HTTP ' + resp.status + ')';
-                    _aiStreaming = false;
                     return;
                 }
                 const reader = resp.body.getReader();
@@ -3290,12 +3341,24 @@ HTML_TEMPLATE = """
                         '</div>';
                     if (window.typeset) await typeset(placeholder);
                     _aiMessages.push({role: 'assistant', content: accumulated});
+                } else if (!errored && !accumulated) {
+                    placeholder.classList.add('error');
+                    placeholder.innerHTML = '<b>AI</b> empty response — check endpoint and model settings.';
                 }
             } catch (e) {
                 placeholder.classList.add('error');
-                placeholder.innerHTML = '<b>AI</b> error: ' + escapeHtml(String(e));
+                if (e.name === 'AbortError') {
+                    placeholder.innerHTML = '<b>AI</b> request cancelled.';
+                } else {
+                    placeholder.innerHTML = '<b>AI</b> error: ' + escapeHtml(String(e));
+                }
             } finally {
                 _aiStreaming = false;
+                _aiAbort = null;
+                if (_aiThinkingTimer) {
+                    clearInterval(_aiThinkingTimer);
+                    _aiThinkingTimer = null;
+                }
             }
         }
 
