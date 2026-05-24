@@ -1242,6 +1242,53 @@ async def api_git_context(request: Request):
     folder_path = request.app.state.folder_path
     return get_git_context(folder_path)
 
+@app.get("/api/commits")
+async def api_commits(request: Request, limit: int = 30):
+    """Recent commits in the active folder's git repo.
+
+    Shells out to `git log` — keeps the implementation simple and works
+    correctly with packed refs, signed commits, and any history shape we
+    might encounter. If the folder isn't a git repo, returns an empty
+    list rather than an error so the UI can render a friendly message.
+    """
+    folder_path = request.app.state.folder_path
+    if not (folder_path / ".git").exists():
+        return {"is_repo": False, "commits": []}
+    try:
+        import subprocess
+        limit = max(1, min(int(limit), 200))
+        # %x1f = unit separator, %x1e = record separator — avoids any
+        # quoting headaches that would come from a JSON or pipe format.
+        result = subprocess.run(
+            ["git", "log", f"-{limit}",
+             "--pretty=format:%h%x1f%an%x1f%ad%x1f%s%x1e",
+             "--date=short"],
+            cwd=str(folder_path),
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return {"is_repo": True, "commits": [], "error": result.stderr.strip()[:300]}
+        commits = []
+        for record in result.stdout.split("\x1e"):
+            record = record.strip()
+            if not record:
+                continue
+            parts = record.split("\x1f")
+            if len(parts) < 4:
+                continue
+            sha, author, date, subject = parts[0], parts[1], parts[2], parts[3]
+            commits.append({
+                "sha": sha,
+                "author": author,
+                "date": date,
+                "subject": subject,
+            })
+        return {"is_repo": True, "commits": commits}
+    except FileNotFoundError:
+        return {"is_repo": True, "commits": [], "error": "git binary not on PATH"}
+    except Exception as e:
+        return {"is_repo": True, "commits": [], "error": str(e)[:300]}
+
 @app.get("/api/search")
 async def search_notes(request: Request, q: str = ""):
     """Search notes in the current folder for a substring (case-insensitive).
@@ -1926,6 +1973,28 @@ THEMED_STYLES = """
             color: {colors[accent]} !important;
             text-decoration: underline;
         }}
+
+        /* Task metadata chips — used by active tasks + global tasks page */
+        .chip {{
+            display: inline-block;
+            padding: 0 5px;
+            margin: 0 1px;
+            font-family: 'space_monoregular', monospace;
+            font-size: 0.62rem;
+            line-height: 1.4;
+            border-radius: 3px;
+            vertical-align: baseline;
+            white-space: nowrap;
+        }}
+        .chip-p1 {{ background: #c4423a; color: #fff; font-weight: bold; }}
+        .chip-p2 {{ background: #d3863a; color: #fff; }}
+        .chip-p3 {{ background: #5a7a8c; color: #fff; }}
+        .chip-due {{ background: #2d4a5e; color: #9ecbe0; }}
+        .chip-tag {{
+            background: transparent;
+            color: {colors[accent]};
+            border: 1px solid {colors[accent]};
+        }}
         #noteForm button {{
             width: 100px;
             padding: 0.25rem 0.5rem;
@@ -2071,69 +2140,112 @@ THEMED_STYLES = """
             display: block;
             margin: 10px auto;
         }}
-        .admin-panel {{
-            position: fixed;
-            bottom: 15px;
-            right: 0;
-            display: flex;
-            align-items: flex-start;
-            z-index: 1000;
-            transform: translateX(calc(100% - 19px)); /* Hide content, show label */
-            transition: transform 0.3s ease;
+        /* ---- Right-edge tab strip + unified side panel ----------------- */
+        #rightTabs {{
+            position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+            display: flex; flex-direction: column; gap: 6px;
+            z-index: 1001;
         }}
-
-        .admin-panel:hover {{
-            transform: translateX(0); /* Show everything on hover */
-        }}
-
-        .admin-label {{
-            background: {colors[label_background]};
-            color: {colors[accent]};
-            padding: 2px 2px 2px 2px;
-            font-family: space_monoregular;
-            font-size: 11px;
-            display: inline-flex;
-            flex-direction: column;
-            line-height: 1;
-            text-transform: lowercase;
-            width: 15px;
-            border-radius: 7px 0 0 7px;
-            border: 1px solid {colors[admin_label_border]};
-            cursor: pointer;
-        }}
-
-        .admin-label span {{
-            display: block;
-            text-align: center;
-            padding: 1px 1px 0.5px 1px;
-        }}
-
-        .admin-content {{
+        #rightTabs button {{
             background: {colors[box_background]};
-            padding: 10px;
-            border: 1px solid {colors[admin_border]};
-            border-left: none;
-            border-bottom-left-radius: 7px;
-            width: 210px;
-            display: flex;
+            color: {colors[accent]};
+            border: 1px solid #555; border-right: none;
+            padding: 10px 6px; cursor: pointer;
+            writing-mode: vertical-rl;
+            font-family: monospace; font-size: 0.72rem;
+            letter-spacing: 1px; text-transform: lowercase;
+            border-radius: 6px 0 0 6px;
+            transition: background 0.15s ease, color 0.15s ease;
+            min-height: 70px;
+        }}
+        #rightTabs button:hover {{ background: #3a3f47; }}
+        #rightTabs button.active {{
+            background: {colors[accent]};
+            color: {colors[background]};
+        }}
+        #sidePanel {{
+            position: fixed; right: 0; top: 0; bottom: 0; width: 460px;
+            background: {colors[background]};
+            color: {colors[text_color]};
+            box-shadow: -2px 0 14px rgba(0,0,0,0.5);
+            border-left: 1px solid #555; z-index: 1000;
+            font-family: 'space_monoregular', monospace;
+            display: none;
+        }}
+        #sidePanel.open {{ display: flex; flex-direction: column; }}
+        #sidePanel header {{
+            padding: 10px 14px; background: {colors[box_background]};
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #555;
+        }}
+        #sidePanel header h2 {{
+            margin: 0; font-size: 0.9rem;
+            color: {colors[accent]};
+            text-transform: lowercase; font-weight: normal;
+        }}
+        #sidePanel .close {{
+            cursor: pointer; opacity: 0.7; font-size: 1.2rem;
+            padding: 0 4px;
+        }}
+        #sidePanel .close:hover {{ opacity: 1; }}
+        #sidePanel .pane {{
+            display: none; flex: 1; overflow-y: auto; padding: 16px;
             flex-direction: column;
-            gap: 10px;
         }}
-
-        .admin-button {{
-            background: {colors[admin_button_bg]};
-            color: {colors[admin_button_text]};
-            border: none;
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-family: inherit;
-            font-size: 0.8rem;
-            width: 100%;
+        #sidePanel .pane.active {{ display: flex; }}
+        #sidePanel .pane-help {{
+            font-size: 0.7rem; opacity: 0.6; margin: 0 0 12px 0;
+            line-height: 1.4;
         }}
+        #sidePanel .pane-label {{
+            display: block; font-size: 0.7rem; opacity: 0.7;
+            margin: 8px 0 4px;
+        }}
+        #sidePanel select, #sidePanel input[type="text"], #sidePanel input[type="password"] {{
+            background: {colors[input_background]};
+            color: {colors[text_color]};
+            border: 1px solid {colors[input_border]};
+            padding: 6px 8px;
+            font-family: inherit; font-size: 0.8rem;
+            width: 100%; box-sizing: border-box;
+            border-radius: 3px;
+        }}
+        .pane-button {{
+            background: {colors[button_bg]};
+            color: {colors[button_text]};
+            border: 1px solid #555;
+            padding: 6px 14px;
+            font-family: inherit; font-size: 0.78rem;
+            cursor: pointer; border-radius: 4px;
+            margin-top: 8px;
+        }}
+        .pane-button:hover {{ background: {colors[button_hover]}; }}
+        .pane-button.danger {{ color: #e08080; border-color: #663030; }}
 
-        .admin-button:hover {{
-            opacity: 0.9;
+        /* Commits panel */
+        #commitsList {{ display: flex; flex-direction: column; gap: 8px; }}
+        #commitsList .commits-empty {{
+            opacity: 0.55; font-style: italic; text-align: center; padding: 20px 0;
+        }}
+        #commitsList .commit {{
+            padding: 8px 10px;
+            border-left: 2px solid {colors[accent]};
+            background: rgba(255,255,255,0.025);
+            border-radius: 0 4px 4px 0;
+        }}
+        #commitsList .commit-meta {{
+            display: flex; gap: 8px; align-items: baseline;
+            font-size: 0.65rem; opacity: 0.7;
+            margin-bottom: 3px;
+        }}
+        #commitsList .commit-sha {{
+            font-family: monospace; color: {colors[accent]};
+            font-weight: bold;
+        }}
+        #commitsList .commit-date {{ opacity: 0.75; }}
+        #commitsList .commit-author {{ margin-left: auto; opacity: 0.6; }}
+        #commitsList .commit-subject {{
+            font-size: 0.75rem; line-height: 1.35;
         }}
 
         #themeSelector {{
@@ -2356,47 +2468,24 @@ HTML_TEMPLATE = """
         }
         .global-tasks-link a:hover { opacity: 1; text-decoration: underline; }
 
-        /* AI assist slideout */
-        #aiToggle {
-            position: fixed; right: 0; top: 50%; transform: translateY(-50%);
-            background: #26292c; color: var(--accent, #df8a3e);
-            border: 1px solid #555; border-right: none;
-            padding: 12px 6px; cursor: pointer;
-            writing-mode: vertical-rl;
-            font-family: monospace; font-size: 0.7rem;
-            border-radius: 6px 0 0 6px; letter-spacing: 1px; z-index: 1001;
+        /* AI assist sub-pane (nested inside #sidePanel) */
+        #sidePanel .ai-tabs {
+            display: flex; border-bottom: 1px solid #555;
+            margin: -16px -16px 12px -16px;
         }
-        #aiToggle:hover { background: #3a3f47; }
-        /* Display-based show/hide — more reliable than transform sliding
-           in case any ancestor or sibling steals the stacking context. */
-        #aiPanel {
-            position: fixed; right: 0; top: 0; bottom: 0; width: 460px;
-            background: #1c1f22; color: #c0c0c0;
-            box-shadow: -2px 0 14px rgba(0,0,0,0.5);
-            border-left: 1px solid #555; z-index: 1002;
-            font-family: monospace;
-            display: none;
+        #sidePanel .ai-tabs button {
+            flex: 1; background: transparent; color: inherit; border: none;
+            padding: 8px; font-family: inherit; font-size: 0.75rem;
+            cursor: pointer; border-bottom: 2px solid transparent;
+            opacity: 0.7;
         }
-        #aiPanel.open { display: flex; flex-direction: column; }
-        #aiPanel header {
-            padding: 8px 12px; background: #26292c; display: flex;
-            justify-content: space-between; align-items: center;
-            border-bottom: 1px solid #555;
-        }
-        #aiPanel header h2 { margin: 0; font-size: 0.85rem; color: var(--accent, #df8a3e); }
-        #aiPanel .close { cursor: pointer; opacity: 0.7; font-size: 1rem; }
-        #aiPanel .tabs { display: flex; border-bottom: 1px solid #555; }
-        #aiPanel .tabs button {
-            flex: 1; background: #1c1f22; color: #c0c0c0; border: none;
-            padding: 6px; font-family: inherit; font-size: 0.7rem; cursor: pointer;
-            border-bottom: 2px solid transparent;
-        }
-        #aiPanel .tabs button.active {
+        #sidePanel .ai-tabs button.active {
             border-bottom-color: var(--accent, #df8a3e);
             color: var(--accent, #df8a3e);
+            opacity: 1;
         }
-        #aiPanel .pane { display: none; flex: 1; overflow-y: auto; padding: 10px; }
-        #aiPanel .pane.active { display: flex; flex-direction: column; }
+        #sidePanel .ai-subpane { display: none; flex: 1; flex-direction: column; overflow-y: auto; }
+        #sidePanel .ai-subpane.active { display: flex; }
         /* Chat pane */
         #aiChatLog {
             flex: 1; overflow-y: auto; padding-bottom: 8px;
@@ -2578,27 +2667,53 @@ HTML_TEMPLATE = """
             }
         }
 
+        // Render a task's text with inline metadata markers (!p1, @YYYY-MM-DD,
+        // #tag) replaced by styled chips. Returns an HTML string.
+        function renderTaskText(text) {
+            // Tokenize on whitespace runs so we can swap individual tokens
+            // without disturbing surrounding spaces.
+            const out = [];
+            let i = 0;
+            const re = /(\\s+)/g;
+            const parts = text.split(re);
+            for (const tok of parts) {
+                if (!tok) continue;
+                if (/^\\s+$/.test(tok)) { out.push(escapeHtml(tok)); continue; }
+                let m;
+                if ((m = tok.match(/^!p([1-3])$/i))) {
+                    out.push('<span class="chip chip-p chip-p' + m[1] + '">!p' + m[1] + '</span>');
+                } else if ((m = tok.match(/^@(\\d{4}-\\d{2}-\\d{2})$/))) {
+                    out.push('<span class="chip chip-due">@' + escapeHtml(m[1]) + '</span>');
+                } else if ((m = tok.match(/^#([A-Za-z][A-Za-z0-9_\\-]*)$/))) {
+                    out.push('<span class="chip chip-tag">#' + escapeHtml(m[1]) + '</span>');
+                } else {
+                    out.push(escapeHtml(tok));
+                }
+            }
+            return out.join('');
+        }
+
         async function updateActiveTasks() {
             try {
                 const response = await fetch('/api/tasks');
                 const tasks = await response.json();
                 const tasksContainer = document.getElementById('activeTasks');
-                
-                tasksContainer.innerHTML = tasks.length ? '' : '<div>No active tasks</div>';
-                
+
+                tasksContainer.innerHTML = tasks.length
+                    ? ''
+                    : '<div style="opacity:0.5;font-style:italic;">No active tasks</div>';
+
                 tasks.forEach(task => {
                     const taskElement = document.createElement('div');
                     taskElement.className = 'task-item';
-                    taskElement.innerHTML = `
-                        <input type="checkbox" 
-                            data-checkbox-index="${task.index}" 
-                            id="task_${task.index}_active">
-                        <label for="task_${task.index}_active">${task.text}</label>
-                    `;
+                    taskElement.innerHTML =
+                        '<input type="checkbox" data-checkbox-index="' + task.index +
+                        '" id="task_' + task.index + '_active">' +
+                        '<label for="task_' + task.index + '_active">' +
+                          renderTaskText(task.text) + '</label>';
                     tasksContainer.appendChild(taskElement);
                 });
 
-                // Add event listeners to task checkboxes
                 tasksContainer.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
                     checkbox.addEventListener('change', handleCheckboxChange);
                 });
@@ -2896,33 +3011,96 @@ HTML_TEMPLATE = """
             }
         }
 
-        // ---- AI assist slideout --------------------------------------------
+        // ---- Right-edge tab system ----------------------------------------
+        function togglePanel(name) {
+            const panel = document.getElementById('sidePanel');
+            const isCurrent = panel.dataset.active === name && panel.classList.contains('open');
+            // Reset all tabs/panes
+            document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('#sidePanel .pane').forEach(p => p.classList.remove('active'));
+            if (isCurrent) {
+                panel.classList.remove('open');
+                panel.dataset.active = '';
+                return;
+            }
+            // Activate the requested panel
+            const tabBtn = document.querySelector('#rightTabs button[data-panel="' + name + '"]');
+            const pane = document.querySelector('#sidePanel .pane[data-panel="' + name + '"]');
+            if (tabBtn) tabBtn.classList.add('active');
+            if (pane) pane.classList.add('active');
+            panel.classList.add('open');
+            panel.dataset.active = name;
+            document.getElementById('sidePanelTitle').textContent = name;
+
+            // Lazy-load each pane's data the first time it's shown.
+            if (name === 'fonts') loadFontScales();
+            if (name === 'admin') initializeTheme();
+            if (name === 'ai') {
+                loadAISettings();
+                loadAIHistory();
+                const ai = document.getElementById('aiInput');
+                if (ai) ai.focus();
+            }
+            if (name === 'commits') loadCommits();
+        }
+
+        function closeSidePanel() {
+            const panel = document.getElementById('sidePanel');
+            panel.classList.remove('open');
+            panel.dataset.active = '';
+            document.querySelectorAll('#rightTabs button').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('#sidePanel .pane').forEach(p => p.classList.remove('active'));
+        }
+
+        // ---- AI assist (now nested inside the side panel) ------------------
         let _aiMessages = [];   // [{role, content}] for the current conversation
         let _aiStreaming = false;
 
-        function toggleAIPanel() {
-            const panel = document.getElementById('aiPanel');
-            const opening = !panel.classList.contains('open');
-            panel.classList.toggle('open');
-            panel.setAttribute('aria-hidden', opening ? 'false' : 'true');
-            if (opening) {
-                loadAISettings();
-                loadAIHistory();
-                document.getElementById('aiInput').focus();
-            }
-        }
-
         function switchAITab(name) {
-            document.querySelectorAll('#aiPanel .tabs button').forEach((b) => {
-                b.classList.toggle('active', b.dataset.tab === name);
+            document.querySelectorAll('#sidePanel .ai-tabs button').forEach((b) => {
+                b.classList.toggle('active', b.dataset.aitab === name);
             });
-            document.querySelectorAll('#aiPanel .pane').forEach((p) => {
+            document.querySelectorAll('#sidePanel .ai-subpane').forEach((p) => {
                 p.classList.remove('active');
             });
             const idMap = { chat: 'aiPaneChat', history: 'aiPaneHistory', settings: 'aiPaneSettings' };
             document.getElementById(idMap[name]).classList.add('active');
             if (name === 'history') loadAIHistory();
             if (name === 'settings') loadAISettings();
+        }
+
+        async function loadCommits() {
+            const list = document.getElementById('commitsList');
+            if (!list) return;
+            list.innerHTML = '<div class="commits-empty">Loading…</div>';
+            try {
+                const resp = await fetch('/api/commits?limit=30');
+                const data = await resp.json();
+                if (!data.is_repo) {
+                    list.innerHTML = '<div class="commits-empty">Current folder is not a git repository.</div>';
+                    return;
+                }
+                if (data.error) {
+                    list.innerHTML = '<div class="commits-empty" style="color:#c33;">' + escapeHtml(data.error) + '</div>';
+                    return;
+                }
+                if (!data.commits.length) {
+                    list.innerHTML = '<div class="commits-empty">No commits yet.</div>';
+                    return;
+                }
+                list.innerHTML = data.commits.map(c => (
+                    '<div class="commit">' +
+                      '<div class="commit-meta">' +
+                        '<span class="commit-sha">' + escapeHtml(c.sha) + '</span>' +
+                        '<span class="commit-date">' + escapeHtml(c.date) + '</span>' +
+                        '<span class="commit-author">' + escapeHtml(c.author) + '</span>' +
+                      '</div>' +
+                      '<div class="commit-subject">' + escapeHtml(c.subject) + '</div>' +
+                    '</div>'
+                )).join('');
+            } catch (e) {
+                list.innerHTML = '<div class="commits-empty" style="color:#c33;">' + escapeHtml(String(e)) + '</div>';
+            }
         }
 
         async function loadAISettings() {
@@ -3168,11 +3346,25 @@ HTML_TEMPLATE = """
         document.addEventListener('DOMContentLoaded', async () => {
             await updateNotes();
             await updateActiveTasks();
-            await initializeTheme();
             await updateLinks();
+            // Theme + font sliders are populated lazily when their tab opens;
+            // the actual theme and font sizes are applied via server-rendered
+            // CSS variables, so the page already looks correct.
 
             const notesContainer = document.getElementById('notesContainer');
             await typeset(notesContainer);
+
+            // ESC closes the side panel from anywhere on the page.
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    const panel = document.getElementById('sidePanel');
+                    if (panel && panel.classList.contains('open')) {
+                        // Don't steal Escape from the search box's clear handler.
+                        if (document.activeElement && document.activeElement.id === 'searchInput') return;
+                        closeSidePanel();
+                    }
+                }
+            });
 
             // Click a collapsed note anywhere on its body to re-expand.
             notesContainer.addEventListener('click', (e) => {
@@ -3218,8 +3410,8 @@ HTML_TEMPLATE = """
                 });
             }
 
-            // Admin panel + header niceties
-            await loadFontScales();
+            // Git context badge stays visible on the directory bar regardless
+            // of the side panel state, so it loads on initial page mount.
             await loadGitContext();
 
             // AI assist Ctrl+Enter to send
@@ -3395,79 +3587,84 @@ print('Hello, World!')
         </div>
     </div>
 
-    <!-- AI Assist Slideout -->
-    <button id="aiToggle" onclick="toggleAIPanel()">AI assist</button>
-    <aside id="aiPanel" aria-hidden="true">
+    <!-- Right-edge tab strip + unified side panel -->
+    <nav id="rightTabs" aria-label="Side panels">
+        <button data-panel="fonts" onclick="togglePanel('fonts')">fonts</button>
+        <button data-panel="admin" onclick="togglePanel('admin')">admin</button>
+        <button data-panel="ai" onclick="togglePanel('ai')">ai</button>
+        <button data-panel="commits" onclick="togglePanel('commits')">commits</button>
+    </nav>
+    <aside id="sidePanel" data-active="">
         <header>
-            <h2>AI assist</h2>
-            <span class="close" onclick="toggleAIPanel()">&times;</span>
+            <h2 id="sidePanelTitle">fonts</h2>
+            <span class="close" onclick="closeSidePanel()" title="Close (Esc)">&times;</span>
         </header>
-        <div class="tabs">
-            <button data-tab="chat" class="active" onclick="switchAITab('chat')">Chat</button>
-            <button data-tab="history" onclick="switchAITab('history')">History</button>
-            <button data-tab="settings" onclick="switchAITab('settings')">Settings</button>
+
+        <div class="pane" data-panel="fonts">
+            <p class="pane-help">Resize each region's text. Changes save automatically and persist across sessions.</p>
+            <div class="font-scales" id="fontScales"></div>
         </div>
-        <div id="aiPaneChat" class="pane active">
-            <div id="aiChatLog"></div>
-            <div id="aiInputRow">
-                <textarea id="aiInput" placeholder="Ask anything about your notes…  [Ctrl+Enter to send]"></textarea>
-                <div class="controls">
-                    <label style="font-size:0.65rem;opacity:0.7;">context:</label>
-                    <select id="aiContext">
+
+        <div class="pane" data-panel="admin">
+            <label class="pane-label">Theme</label>
+            <select id="themeSelector"></select>
+            <button class="pane-button" onclick="saveTheme()">Save theme</button>
+            <div style="flex:1;"></div>
+            <button class="pane-button danger" onclick="shutdownServer()">Shutdown server</button>
+        </div>
+
+        <div class="pane" data-panel="ai">
+            <div class="ai-tabs">
+                <button data-aitab="chat" class="active" onclick="switchAITab('chat')">Chat</button>
+                <button data-aitab="history" onclick="switchAITab('history')">History</button>
+                <button data-aitab="settings" onclick="switchAITab('settings')">Settings</button>
+            </div>
+            <div id="aiPaneChat" class="ai-subpane active">
+                <div id="aiChatLog"></div>
+                <div id="aiInputRow">
+                    <textarea id="aiInput" placeholder="Ask anything about your notes…  [Ctrl+Enter to send]"></textarea>
+                    <div class="controls">
+                        <label style="font-size:0.65rem;opacity:0.7;">context:</label>
+                        <select id="aiContext">
+                            <option value="all">all notes</option>
+                            <option value="200">last 200 lines</option>
+                            <option value="100">last 100 lines</option>
+                            <option value="50">last 50 lines</option>
+                        </select>
+                        <button onclick="aiNewChat()">New chat</button>
+                        <button class="send" onclick="aiSend()">Send</button>
+                    </div>
+                </div>
+            </div>
+            <div id="aiPaneHistory" class="ai-subpane">
+                <div id="aiHistoryList"></div>
+            </div>
+            <div id="aiPaneSettings" class="ai-subpane">
+                <div id="aiSettings">
+                    <label>Endpoint (OpenAI-compatible /v1/chat/completions)</label>
+                    <input type="text" id="aiEndpoint" placeholder="https://api.openai.com/v1/chat/completions">
+                    <label>Model</label>
+                    <input type="text" id="aiModel" placeholder="gpt-4o-mini">
+                    <label>API key</label>
+                    <input type="password" id="aiApiKey" placeholder="Leave blank to keep existing">
+                    <div class="key-status" id="aiKeyStatus"></div>
+                    <label>Default context</label>
+                    <select id="aiDefaultContext">
                         <option value="all">all notes</option>
                         <option value="200">last 200 lines</option>
                         <option value="100">last 100 lines</option>
                         <option value="50">last 50 lines</option>
                     </select>
-                    <button onclick="aiNewChat()">New chat</button>
-                    <button class="send" onclick="aiSend()">Send</button>
+                    <button class="pane-button" onclick="aiSaveSettings()">Save settings</button>
                 </div>
             </div>
         </div>
-        <div id="aiPaneHistory" class="pane">
-            <div id="aiHistoryList"></div>
-        </div>
-        <div id="aiPaneSettings" class="pane">
-            <div id="aiSettings">
-                <label>Endpoint (OpenAI-compatible /v1/chat/completions)</label>
-                <input type="text" id="aiEndpoint" placeholder="https://api.openai.com/v1/chat/completions">
-                <label>Model</label>
-                <input type="text" id="aiModel" placeholder="gpt-4o-mini">
-                <label>API key</label>
-                <input type="password" id="aiApiKey" placeholder="Leave blank to keep existing">
-                <div class="key-status" id="aiKeyStatus"></div>
-                <label>Default context</label>
-                <select id="aiDefaultContext">
-                    <option value="all">all notes</option>
-                    <option value="200">last 200 lines</option>
-                    <option value="100">last 100 lines</option>
-                    <option value="50">last 50 lines</option>
-                </select>
-                <button class="save" onclick="aiSaveSettings()">Save settings</button>
-            </div>
+
+        <div class="pane" data-panel="commits">
+            <p class="pane-help">Recent commits in the current folder's git repo.</p>
+            <div id="commitsList"><div class="commits-empty">Loading…</div></div>
         </div>
     </aside>
-
-    <!-- Admin Panel -->
-    <div class="admin-panel">
-        <div class="admin-label">
-            <span>a</span>
-            <span>d</span>
-            <span>m</span>
-            <span>i</span>
-            <span>n</span>
-        </div>
-        <div class="admin-content">
-            <select id="themeSelector">
-                <!-- Will be populated dynamically -->
-            </select>
-            <button class="admin-button" onclick="saveTheme()">Save Theme</button>
-            <div class="font-scales" id="fontScales">
-                <!-- Sliders inserted dynamically -->
-            </div>
-            <button class="admin-button" onclick="shutdownServer()">Shutdown</button>
-        </div>
-    </div>
 </body>
 </html>
 """

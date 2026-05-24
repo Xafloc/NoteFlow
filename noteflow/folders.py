@@ -457,6 +457,16 @@ GLOBAL_TASKS_HTML = """\
   .folder-actions { display: inline-flex; gap: 8px; font-size: 0.7rem; }
   .folder-actions a { cursor: pointer; }
   mark { background: #df8a3e; color: #000; padding: 0 1px; }
+  .chip {
+    display: inline-block; padding: 0 5px; margin: 0 1px;
+    font-family: monospace; font-size: 0.62rem; line-height: 1.4;
+    border-radius: 3px; vertical-align: baseline; white-space: nowrap;
+  }
+  .chip-p1 { background: #c4423a; color: #fff; font-weight: bold; }
+  .chip-p2 { background: #d3863a; color: #fff; }
+  .chip-p3 { background: #5a7a8c; color: #fff; }
+  .chip-due { background: #2d4a5e; color: #9ecbe0; }
+  .chip-tag { background: transparent; color: #df8a3e; border: 1px solid #df8a3e; }
 </style>
 </head>
 <body>
@@ -485,6 +495,25 @@ function highlight(text, q) {
   if (!q) return escapeHtml(text);
   const escQ = q.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
   return escapeHtml(text).replace(new RegExp(escQ, 'gi'), m => '<mark>'+m+'</mark>');
+}
+function renderTaskText(text) {
+  const parts = text.split(/(\\s+)/);
+  const out = [];
+  for (const tok of parts) {
+    if (!tok) continue;
+    if (/^\\s+$/.test(tok)) { out.push(escapeHtml(tok)); continue; }
+    let m;
+    if ((m = tok.match(/^!p([1-3])$/i))) {
+      out.push('<span class="chip chip-p chip-p' + m[1] + '">!p' + m[1] + '</span>');
+    } else if ((m = tok.match(/^@(\\d{4}-\\d{2}-\\d{2})$/))) {
+      out.push('<span class="chip chip-due">@' + escapeHtml(m[1]) + '</span>');
+    } else if ((m = tok.match(/^#([A-Za-z][A-Za-z0-9_\\-]*)$/))) {
+      out.push('<span class="chip chip-tag">#' + escapeHtml(m[1]) + '</span>');
+    } else {
+      out.push(escapeHtml(tok));
+    }
+  }
+  return out.join('');
 }
 
 async function loadGlobalTasks() {
@@ -517,7 +546,7 @@ async function loadGlobalTasks() {
       '<div class="task-row ' + (t.completed ? 'completed' : '') + '">' +
         '<input type="checkbox" ' + (t.completed ? 'checked' : '') +
           ' onchange="toggleTask(' + t.id + ')">' +
-        '<label>' + escapeHtml(t.text) + '</label>' +
+        '<label>' + renderTaskText(t.text) + '</label>' +
       '</div>'
     )).join('') : '<div class="empty">No tasks.</div>';
     return header + rows;
