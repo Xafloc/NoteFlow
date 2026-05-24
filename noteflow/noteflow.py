@@ -2170,10 +2170,13 @@ THEMED_STYLES = """
             color: {colors[background]};
         }}
         /* Slide-in side panel. Display flex always (so children compute
-           sizes), with transform pushing it off-screen when closed. */
+           sizes), with transform pushing it off-screen when closed.
+           Uses box_background (the same color as note/task/links cards)
+           so the panel reads as a darker surface on every theme,
+           including dark-blue where the page background is navy. */
         #sidePanel {{
             position: fixed; right: 0; top: 0; bottom: 0; width: 460px;
-            background: {colors[background]};
+            background: {colors[box_background]};
             color: {colors[text_color]};
             box-shadow: -2px 0 14px rgba(0,0,0,0.5);
             border-left: 1px solid #555; z-index: 1000;
@@ -2188,7 +2191,8 @@ THEMED_STYLES = """
             visibility: visible;
         }}
         #sidePanel header {{
-            padding: 10px 14px; background: {colors[box_background]};
+            padding: 10px 14px;
+            background: {colors[label_background]};
             display: flex; justify-content: space-between; align-items: center;
             border-bottom: 1px solid #555;
         }}
@@ -2469,6 +2473,29 @@ HTML_TEMPLATE = """
             width: 32px; text-align: right;
             font-family: monospace; font-size: 0.65rem;
             opacity: 0.7;
+        }
+        /* Live previews of each region's scaled size. The boxes pick up
+           the same CSS variables as the real sections, so dragging a
+           slider shows here even though the right column is hidden
+           behind the open panel. */
+        .font-preview {
+            display: flex; flex-direction: column; gap: 14px;
+            margin-top: 18px;
+        }
+        .font-preview-label {
+            font-size: 0.6rem; opacity: 0.55;
+            text-transform: uppercase; letter-spacing: 1px;
+            margin-bottom: 4px;
+        }
+        .font-preview-box {
+            background: rgba(0,0,0,0.25);
+            border-radius: 4px; padding: 10px 12px;
+            min-height: 26px;
+        }
+        .font-preview-box code {
+            background: rgba(255,255,255,0.08);
+            padding: 1px 4px; border-radius: 3px;
+            font-family: monospace;
         }
         .global-tasks-link {
             font-size: 0.7rem;
@@ -3616,8 +3643,40 @@ print('Hello, World!')
         </header>
 
         <div class="pane" data-panel="fonts">
-            <p class="pane-help">Resize each region's text. Changes save automatically and persist across sessions.</p>
+            <p class="pane-help">
+                Resize each region's text. The previews below scale in
+                real time so you can see the effect even when the panel
+                covers the actual sections.
+            </p>
             <div class="font-scales" id="fontScales"></div>
+            <div class="font-preview">
+                <div class="font-preview-block">
+                    <div class="font-preview-label">notes preview</div>
+                    <div class="font-preview-box notes-preview">
+                        <div class="markdown-body" style="font-size: calc(0.9rem * var(--font-scale-notes, 1));">
+                            The quick brown fox jumps over the lazy dog.
+                            <em>Italic</em>, <strong>bold</strong>, and <code>inline code</code>.
+                        </div>
+                    </div>
+                </div>
+                <div class="font-preview-block">
+                    <div class="font-preview-label">tasks preview</div>
+                    <div class="font-preview-box">
+                        <div style="display:flex;gap:8px;align-items:flex-start;">
+                            <input type="checkbox" disabled>
+                            <label style="font-size: calc(0.75rem * var(--font-scale-tasks, 1));">
+                                Sample active task line
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="font-preview-block">
+                    <div class="font-preview-label">links preview</div>
+                    <div class="font-preview-box" style="font-size: calc(0.7rem * var(--font-scale-links, 1));">
+                        example.com — site archive [2026-05-24 08:00:00]
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="pane" data-panel="admin">
