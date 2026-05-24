@@ -5,8 +5,12 @@ import os
 import sys
 import re
 import json
+import html
 import mimetypes
 import base64
+import argparse
+import threading
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -30,6 +34,7 @@ from mdit_py_plugins.dollarmath import dollarmath_plugin
 ###############################################################################
 # Constants & Configuration
 ###############################################################################
+__version__ = "0.4.0"
 NOTE_SEPARATOR = "\n<!-- note -->\n"
 APP_PORT = None
 CURRENT_THEME = "dark-orange" # Default theme
@@ -293,6 +298,10 @@ class NoteManager:
                 # If both fail, use UTF-8 with error handling
                 content = self.file_path.read_text(encoding='utf-8', errors='replace')
 
+        # Normalize CRLF to LF — external editors on Windows save with \r\n
+        # and stray \r chars corrupt header regex matches downstream.
+        content = content.replace('\r\n', '\n').replace('\r', '\n')
+
         self._parse_notes(content)
 
     def _parse_notes(self, content: str):
@@ -385,18 +394,45 @@ class Note:
         return cls(title, content, timestamp, manager)
 
     def _parse_tasks(self):
-        """Extract tasks from note content"""
+        """Extract tasks from note content, skipping checkboxes inside code regions."""
         self.tasks = []
-        checkbox_pattern = re.compile(r'\[([xX ])\]')  # Matches [x], [X], or [ ]
-        
+        checkbox_pattern = re.compile(r'\[([xX ])\]')
+
+        code_regions = self._code_regions(self.content)
+
         for match in checkbox_pattern.finditer(self.content):
+            if any(start <= match.start() < end for start, end in code_regions):
+                continue  # Inside a fenced or inline code region — skip
             task = Task(
-                index=self.manager.checkbox_index,  # Get unique ID from manager
-                checked=match.group(1).lower() == 'x',  # Check if marked with 'x' or 'X'
-                text=self._extract_task_text(match.start())  # Get full task text
+                index=self.manager.checkbox_index,
+                checked=match.group(1).lower() == 'x',
+                text=self._extract_task_text(match.start())
             )
             self.tasks.append(task)
-            self.manager.checkbox_index += 1  # Increment global task counter
+            self.manager.checkbox_index += 1
+
+    @staticmethod
+    def _code_regions(text: str) -> List[tuple]:
+        """Return (start, end) byte offsets covering markdown code regions.
+
+        Covers fenced code blocks (``` ... ``` or ~~~ ... ~~~) and inline
+        code spans (`...`). Used to mask out checkbox markers that are
+        actually part of documentation rather than real tasks.
+        """
+        regions = []
+        # Fenced blocks first — they take precedence over inline spans inside them.
+        fence_re = re.compile(r'(^|\n)(```|~~~)[^\n]*\n.*?\n\2(?=\n|$)', re.DOTALL)
+        for m in fence_re.finditer(text):
+            regions.append((m.start(), m.end()))
+
+        # Inline spans — single, double, or triple backtick spans on one line.
+        inline_re = re.compile(r'(`+)[^`\n]+?\1')
+        for m in inline_re.finditer(text):
+            pos = m.start()
+            if any(s <= pos < e for s, e in regions):
+                continue  # Already covered by a fenced block
+            regions.append((m.start(), m.end()))
+        return regions
 
     def _extract_task_text(self, checkbox_pos: int) -> str:
         """Extract the full text of a task item"""
@@ -710,16 +746,48 @@ def should_ignore_resource(url):
 ###############################################################################
 # Improved Resource Inlining (NEW)
 ###############################################################################
+# Per-archive request cache shared across passes. Each archive operation
+# creates a fresh cache so repeated @import / url(...) refs only hit the
+# network once. Mirrors go-shiori/obelisk's caching behavior.
+ARCHIVE_RESOURCE_TIMEOUT = 10   # seconds per individual fetch
+ARCHIVE_TOTAL_TIMEOUT = 30      # seconds for the whole archive operation
+ARCHIVE_MAX_RESOURCE_BYTES = 8 * 1024 * 1024  # skip resources larger than 8 MiB
 
-def fetch_resource(session, url):
-    """Fetch a resource and return bytes, or None on failure."""
+def fetch_resource(session, url, cache=None, deadline=None):
+    """Fetch a resource and return (bytes, content-type), or (None, None) on failure.
+
+    `cache` is an optional dict mapping URL -> (content, content_type) used to
+    deduplicate fetches within a single archive operation. `deadline` is an
+    optional absolute time.time() limit after which we stop fetching.
+    """
+    if cache is not None and url in cache:
+        return cache[url]
+    if deadline is not None and time.time() > deadline:
+        if cache is not None:
+            cache[url] = (None, None)
+        return None, None
     try:
-        resp = session.get(url, timeout=10)
+        resp = session.get(url, timeout=ARCHIVE_RESOURCE_TIMEOUT, stream=True)
         if resp.ok:
-            return resp.content, resp.headers.get('content-type', '')
+            # Reject pathologically large resources rather than ballooning the archive.
+            cl = resp.headers.get('content-length')
+            if cl and cl.isdigit() and int(cl) > ARCHIVE_MAX_RESOURCE_BYTES:
+                resp.close()
+                result = (None, None)
+            else:
+                content = resp.content
+                if len(content) > ARCHIVE_MAX_RESOURCE_BYTES:
+                    result = (None, None)
+                else:
+                    result = (content, resp.headers.get('content-type', ''))
+        else:
+            result = (None, None)
     except Exception as e:
         print(f"Error fetching {url}: {e}")
-    return None, None
+        result = (None, None)
+    if cache is not None:
+        cache[url] = result
+    return result
 
 def convert_to_data_uri(content_bytes, content_type):
     if not content_type:
@@ -727,7 +795,7 @@ def convert_to_data_uri(content_bytes, content_type):
     b64 = base64.b64encode(content_bytes).decode('utf-8')
     return f"data:{content_type};base64,{b64}"
 
-def inline_css_resources(session, css_content, base_url):
+def inline_css_resources(session, css_content, base_url, cache=None, deadline=None):
     done = False
     # Inline @import and url(...) multiple times until no external refs remain
     while not done:
@@ -739,10 +807,10 @@ def inline_css_resources(session, css_content, base_url):
                 continue
             done = False
             css_url = urljoin(base_url, imp)
-            content, ctype = fetch_resource(session, css_url)
+            content, ctype = fetch_resource(session, css_url, cache=cache, deadline=deadline)
             if content:
                 sub_css = content.decode('utf-8', errors='replace')
-                sub_css = inline_css_resources(session, sub_css, css_url)
+                sub_css = inline_css_resources(session, sub_css, css_url, cache=cache, deadline=deadline)
                 css_content = css_content.replace(f'@import "{imp}";', sub_css)
             else:
                 css_content = css_content.replace(f'@import "{imp}";', '')
@@ -756,7 +824,7 @@ def inline_css_resources(session, css_content, base_url):
                 continue
             done = False
             resource_url = urljoin(base_url, u)
-            cbytes, ctype = fetch_resource(session, resource_url)
+            cbytes, ctype = fetch_resource(session, resource_url, cache=cache, deadline=deadline)
             if cbytes:
                 data_uri = convert_to_data_uri(cbytes, ctype)
                 css_content = css_content.replace(f'url({u})', f'url({data_uri})')
@@ -764,13 +832,13 @@ def inline_css_resources(session, css_content, base_url):
 
     return css_content
 
-def inline_html_resources(session, soup, base_url):
+def inline_html_resources(session, soup, base_url, cache=None, deadline=None):
     # Images and srcset
     for img in soup.find_all('img'):
         src = img.get('src')
         if src and not src.startswith('data:') and not should_ignore_resource(src):
             full_url = urljoin(base_url, src)
-            cbytes, ctype = fetch_resource(session, full_url)
+            cbytes, ctype = fetch_resource(session, full_url, cache=cache, deadline=deadline)
             if cbytes:
                 img['src'] = convert_to_data_uri(cbytes, ctype)
 
@@ -782,7 +850,7 @@ def inline_html_resources(session, soup, base_url):
                 urlpart = part.strip().split(' ')[0]
                 if urlpart and not urlpart.startswith('data:') and not should_ignore_resource(urlpart):
                     full_url = urljoin(base_url, urlpart)
-                    cbytes, ctype = fetch_resource(session, full_url)
+                    cbytes, ctype = fetch_resource(session, full_url, cache=cache, deadline=deadline)
                     if cbytes:
                         data_uri = convert_to_data_uri(cbytes, ctype)
                         rest = part.strip()[len(urlpart):]
@@ -798,7 +866,7 @@ def inline_html_resources(session, soup, base_url):
         ssrc = source.get('src')
         if ssrc and not ssrc.startswith('data:') and not should_ignore_resource(ssrc):
             full_url = urljoin(base_url, ssrc)
-            cbytes, ctype = fetch_resource(session, full_url)
+            cbytes, ctype = fetch_resource(session, full_url, cache=cache, deadline=deadline)
             if cbytes:
                 source['src'] = convert_to_data_uri(cbytes, ctype)
 
@@ -809,7 +877,7 @@ def inline_html_resources(session, soup, base_url):
                 urlpart = part.strip().split(' ')[0]
                 if urlpart and not urlpart.startswith('data:') and not should_ignore_resource(urlpart):
                     full_url = urljoin(base_url, urlpart)
-                    cbytes, ctype = fetch_resource(session, full_url)
+                    cbytes, ctype = fetch_resource(session, full_url, cache=cache, deadline=deadline)
                     if cbytes:
                         data_uri = convert_to_data_uri(cbytes, ctype)
                         rest = part.strip()[len(urlpart):]
@@ -825,7 +893,7 @@ def inline_html_resources(session, soup, base_url):
         src = script.get('src')
         if src and not src.startswith('data:') and not should_ignore_resource(src):
             res_url = urljoin(base_url, src)
-            cbytes, ctype = fetch_resource(session, res_url)
+            cbytes, ctype = fetch_resource(session, res_url, cache=cache, deadline=deadline)
             if cbytes:
                 script.string = cbytes.decode('utf-8', errors='replace')
                 del script['src']
@@ -835,10 +903,10 @@ def inline_html_resources(session, soup, base_url):
         href = link.get('href')
         if href and not should_ignore_resource(href):
             css_url = urljoin(base_url, href)
-            cbytes, ctype = fetch_resource(session, css_url)
+            cbytes, ctype = fetch_resource(session, css_url, cache=cache, deadline=deadline)
             if cbytes:
                 css_text = cbytes.decode('utf-8', errors='replace')
-                css_text = inline_css_resources(session, css_text, css_url)
+                css_text = inline_css_resources(session, css_text, css_url, cache=cache, deadline=deadline)
                 style_tag = soup.new_tag('style')
                 style_tag.string = css_text
                 link.replace_with(style_tag)
@@ -850,7 +918,7 @@ def inline_html_resources(session, soup, base_url):
         for u in urls:
             if not u.startswith('data:') and not should_ignore_resource(u):
                 full_url = urljoin(base_url, u)
-                cbytes, ctype = fetch_resource(session, full_url)
+                cbytes, ctype = fetch_resource(session, full_url, cache=cache, deadline=deadline)
                 if cbytes:
                     data_uri = convert_to_data_uri(cbytes, ctype)
                     style_val = style_val.replace(u, data_uri)
@@ -858,15 +926,20 @@ def inline_html_resources(session, soup, base_url):
 
     return soup
 
-def inline_all_resources(url, html):
+def inline_all_resources(url, source_html):
     session = requests.Session()
     session.headers.update({'User-Agent': 'Mozilla/5.0'})
     base_url = urljoin(url, '/')
 
-    soup = BeautifulSoup(html, 'html.parser')
+    cache = {}
+    deadline = time.time() + ARCHIVE_TOTAL_TIMEOUT
+
+    soup = BeautifulSoup(source_html, 'html.parser')
     for _ in range(5): # max 5 passes
+        if time.time() > deadline:
+            break
         old_html = str(soup)
-        soup = inline_html_resources(session, soup, base_url)
+        soup = inline_html_resources(session, soup, base_url, cache=cache, deadline=deadline)
         new_html = str(soup)
         if new_html == old_html:
             break
@@ -1181,16 +1254,22 @@ async def get_links(request: Request):
     html_parts = []
     for domain in sorted_domains:
         data = link_groups[domain]
-        html_parts.append(f'<div class="archived-link"><a href="#">{data["domain"]}</a>')
-        for archive in data['archives']:
-            html_parts.append(
-            f'<span class="archive-reference">'
-            f'<a href="/assets/sites/{archive["filename"]}" target="_blank">'
-            f'site archive [{archive["timestamp"]}]</a>'
-            f'<span style="color:red;cursor:pointer;font-size:0.5rem; margin-left:5px;" '
-            f'onclick="deleteArchive(\'{archive["filename"]}\')">delete</span>'
-            f'</span>'
+        html_parts.append(
+            f'<div class="archived-link"><a href="#">{html.escape(data["domain"])}</a>'
         )
+        for archive in data['archives']:
+            # JSON-encode the filename so quotes/HTML entities can't break the onclick.
+            safe_href = html.escape(quote(archive["filename"]), quote=True)
+            safe_attr = html.escape(archive["filename"], quote=True)
+            html_parts.append(
+                f'<span class="archive-reference">'
+                f'<a href="/assets/sites/{safe_href}" target="_blank">'
+                f'site archive [{archive["timestamp"]}]</a>'
+                f'<span style="color:red;cursor:pointer;font-size:0.5rem; margin-left:5px;" '
+                f'data-filename="{safe_attr}" '
+                f'onclick="deleteArchive(this.dataset.filename)">delete</span>'
+                f'</span>'
+            )
         html_parts.append('</div>')
 
     result = {
@@ -2067,6 +2146,11 @@ THEMED_STYLES = """
             flex-flow: row nowrap;
             align-items: center;
             overflow: hidden;
+            cursor: pointer;
+            transition: filter 0.15s ease;
+        }}
+        .directory-bar:hover {{
+            filter: brightness(1.15);
         }}
         .directory-bar-content {{
             white-space: nowrap;
@@ -2428,6 +2512,47 @@ HTML_TEMPLATE = """
             }
         }
 
+        // Collapse / expand a single note. Click anywhere on a collapsed
+        // note to re-expand it without using the menu.
+        function toggleNote(noteIndex) {
+            const note = document.getElementById('note-' + noteIndex);
+            if (!note) return;
+            note.classList.toggle('collapsed');
+        }
+
+        // Collapse every note except the one at noteIndex (focus mode).
+        function collapseOthers(noteIndex) {
+            document.querySelectorAll('#notesContainer .notes-item').forEach((note) => {
+                const isTarget = note.id === 'note-' + noteIndex;
+                note.classList.toggle('collapsed', !isTarget);
+            });
+        }
+
+        // Copy text to clipboard with brief visual feedback on the element.
+        async function copyToClipboard(text, element) {
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed';
+                    ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                }
+                if (element) {
+                    const prev = element.style.color;
+                    element.style.color = 'var(--accent, #df8a3e)';
+                    setTimeout(() => { element.style.color = prev; }, 600);
+                }
+            } catch (err) {
+                console.error('Copy failed:', err);
+            }
+        }
+
         window.MathJax = {
             tex: {
                 inlineMath: [['$', '$']],
@@ -2457,6 +2582,24 @@ HTML_TEMPLATE = """
 
             const notesContainer = document.getElementById('notesContainer');
             await typeset(notesContainer);
+
+            // Click a collapsed note anywhere on its body to re-expand.
+            notesContainer.addEventListener('click', (e) => {
+                const collapsed = e.target.closest('.notes-item.collapsed');
+                if (!collapsed) return;
+                // Don't fire when the click was on an interactive child element.
+                if (e.target.closest('.section-label, button, a, input')) return;
+                collapsed.classList.remove('collapsed');
+            });
+
+            // Directory bar: click anywhere on it to copy the folder path.
+            const dirBar = document.getElementById('directoryBar');
+            if (dirBar) {
+                dirBar.addEventListener('click', () => {
+                    const path = dirBar.querySelector('.directory-bar-content');
+                    if (path) copyToClipboard(path.textContent.trim(), dirBar);
+                });
+            }
 
             // Get the textarea element
             const noteContent = document.getElementById('noteContent');
@@ -2570,7 +2713,7 @@ print('Hello, World!')
         </div>
         <div class="right-column">
             <!-- Directory Bar -->
-            <div class="directory-bar">
+            <div id="directoryBar" class="directory-bar" title="Click to copy folder path">
                 <span class="directory-bar-content">{folder_path}&nbsp;</span>
                 <span class="directory-bar-content">{folder_path}&nbsp;</span>
                 <span class="directory-bar-content">{folder_path}&nbsp;</span>
@@ -2885,42 +3028,83 @@ async def get_page_title(url: str) -> str:
 ###############################################################################
 # Main Entry Point
 ###############################################################################
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="noteflow",
+        description=(
+            "NoteFlow — a lightweight, Markdown-based note-taking application "
+            "with task management. Run inside any folder; notes are stored in "
+            "notes.md and archives under assets/sites/."
+        ),
+    )
+    parser.add_argument(
+        "folder",
+        nargs="?",
+        default=None,
+        help="Folder to use as the notes directory (defaults to the current working directory).",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to bind to. If omitted or in use, NoteFlow scans upward from 8000.",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not auto-open the browser when the server starts.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"noteflow {__version__}",
+    )
+    return parser
+
+
+def _open_browser_when_ready(url: str, delay: float = 1.0):
+    """Open `url` in the default browser shortly after server startup."""
+    def _go():
+        try:
+            webbrowser.open(url, new=2)
+        except Exception as e:
+            print(f"Could not auto-open browser: {e}")
+    threading.Timer(delay, _go).start()
+
+
 def main():
     import uvicorn
     global note_manager
-    
+
+    args = _build_arg_parser().parse_args()
+
     try:
-        # Get and validate folder path
-        folder_path_input = sys.argv[1] if len(sys.argv) > 1 else None
-        working_dir = validate_folder_path(folder_path_input)
+        working_dir = validate_folder_path(args.folder)
         print(f"Using folder: {working_dir}")
 
-        # Create necessary directories
         create_directories(working_dir)
         mount_assets_directory(app, working_dir)
 
-        # Initialize the note manager with the base path
         note_manager = NoteManager(working_dir)
-        
-        # Store folder_path in app.state for access in routes and functions
         app.state.folder_path = working_dir
 
-        # Find available port
-        port = find_free_port()
+        # Honor --port if given, otherwise scan from 8000.
+        port = find_free_port(args.port) if args.port else find_free_port()
         set_app_port(port)
-        
-        # Configure logging
+
         log_config = uvicorn.config.LOGGING_CONFIG
         log_config["loggers"]["uvicorn.access"]["level"] = "DEBUG"
-        
-        # Start server
+
+        if not args.no_browser:
+            _open_browser_when_ready(f"http://127.0.0.1:{port}/")
+
         uvicorn.run(
-            app, 
-            host="0.0.0.0", 
-            port=port, 
+            app,
+            host="0.0.0.0",
+            port=port,
             log_level="debug",
             log_config=log_config,
-            access_log=False
+            access_log=False,
         )
     except Exception as e:
         print(f"Error: {e}")
