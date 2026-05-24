@@ -2602,15 +2602,23 @@ HTML_TEMPLATE = """
 
         async function addNote() {
             const title = document.getElementById('noteTitle').value;
-            const content = document.getElementById('noteContent').value.trim(); // Add trim()
+            const content = document.getElementById('noteContent').value.trim();
             const editIndex = document.getElementById('noteContent').getAttribute('data-edit-index');
-            
+
             if (!content) return;
 
-            // Check if content contains a +http link
             const hasArchiveLink = content.includes('+http');
+            const overlay = document.querySelector('.loading-overlay');
+            let timeoutId = null;
+            let controller = null;
+
             if (hasArchiveLink) {
-                document.querySelector('.loading-overlay').style.display = 'flex';
+                overlay.style.display = 'flex';
+                // Cap the request at 60s so the spinner can never hang
+                // forever — the backend's own archive cap is ~30s, this is
+                // a belt-and-suspenders for network weirdness.
+                controller = new AbortController();
+                timeoutId = setTimeout(() => controller.abort(), 60000);
             }
 
             try {
@@ -2618,20 +2626,20 @@ HTML_TEMPLATE = """
                 formData.append('title', title);
                 formData.append('content', content);
 
-                // Choose endpoint based on whether we're editing or adding
                 const url = editIndex !== null ? `/api/notes/${editIndex}` : '/api/notes';
                 const method = editIndex !== null ? 'PUT' : 'POST';
 
-                await fetch(url, {
+                const resp = await fetch(url, {
                     method: method,
-                    body: formData
+                    body: formData,
+                    signal: controller ? controller.signal : undefined,
                 });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
 
-                // Clear form and edit state
                 document.getElementById('noteTitle').value = '';
                 document.getElementById('noteContent').value = '';
                 document.getElementById('noteContent').removeAttribute('data-edit-index');
-                
+
                 await updateNotes();
                 await updateActiveTasks();
                 const notesContainer = document.getElementById('notesContainer');
@@ -2641,10 +2649,15 @@ HTML_TEMPLATE = """
                 }
             } catch (error) {
                 console.error('Error saving note:', error);
-                alert('Failed to save note');
+                if (error.name === 'AbortError') {
+                    alert('Archive took too long (60s). The page may still be archived — refresh to check.');
+                } else {
+                    alert('Failed to save note: ' + error.message);
+                }
             } finally {
+                if (timeoutId) clearTimeout(timeoutId);
                 if (hasArchiveLink) {
-                    document.querySelector('.loading-overlay').style.display = 'none';
+                    overlay.style.display = 'none';
                 }
             }
         }
