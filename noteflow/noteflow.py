@@ -2303,6 +2303,83 @@ THEMED_STYLES = """
             object-fit: contain;
             border-radius: 4px;
         }}
+        /* ---- Cheat-sheet modal ----------------------------------------- */
+        .cheatsheet-overlay {{
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 2500;
+            justify-content: center;
+            align-items: center;
+        }}
+        .cheatsheet-overlay.active {{
+            display: flex;
+        }}
+        .cheatsheet {{
+            background: {colors[box_background]};
+            color: {colors[text_color]};
+            border: 1px solid {colors[note_border]};
+            border-radius: 8px;
+            padding: 28px 36px;
+            max-width: 720px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            position: relative;
+        }}
+        .cheatsheet h2 {{
+            margin: 0 0 16px 0;
+            color: {colors[accent]};
+            font-size: 1.3em;
+            border-bottom: 1px solid {colors[accent]};
+            padding-bottom: 8px;
+        }}
+        .cheatsheet h3 {{
+            margin: 18px 0 8px 0;
+            color: {colors[accent]};
+            font-size: 1.05em;
+        }}
+        .cheatsheet table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 12px;
+            font-size: 0.92em;
+        }}
+        .cheatsheet td {{
+            padding: 4px 10px;
+            vertical-align: top;
+            border-bottom: 1px solid {colors[table_border]};
+        }}
+        .cheatsheet td:first-child {{
+            white-space: nowrap;
+            font-family: 'Courier New', monospace;
+            color: {colors[accent]};
+            width: 45%;
+        }}
+        .cheatsheet .close-btn {{
+            position: absolute;
+            top: 12px; right: 16px;
+            background: none;
+            border: none;
+            color: {colors[text_color]};
+            font-size: 1.4em;
+            cursor: pointer;
+            opacity: 0.6;
+        }}
+        .cheatsheet .close-btn:hover {{
+            opacity: 1;
+        }}
+        .cheatsheet kbd {{
+            background: {colors[input_background]};
+            border: 1px solid {colors[table_border]};
+            border-radius: 3px;
+            padding: 1px 6px;
+            font-size: 0.88em;
+            font-family: 'Courier New', monospace;
+        }}
         /* ---- Right-edge tab strip + unified side panel ----------------- */
         /* Tabs anchored low-right (admin panel's old spot), stacked upward. */
         #rightTabs {{
@@ -2613,46 +2690,124 @@ HTML_TEMPLATE = """
         :root {
             <!-- FONT_SCALE_VARS -->
         }
-        /* Local search panel */
-        .search-box {
-            background: var(--box-bg, #26292c);
-            padding: 4px;
-            margin-bottom: 4px;
-            border-radius: 4px;
-            display: flex;
-            gap: 4px;
+        /* ---- Full-width search bar at top ------------------------------ */
+        .search-bar {
+            display: none;
             align-items: center;
+            gap: 8px;
+            background: var(--box-bg, #26292c);
+            border-bottom: 1px solid var(--accent, #df8a3e);
+            padding: 6px 12px;
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 1500;
         }
-        .search-box input {
+        .search-bar.active {
+            display: flex;
+        }
+        .search-bar .search-icon {
+            color: var(--accent, #df8a3e);
+            font-size: 0.85rem;
+            opacity: 0.7;
+        }
+        .search-bar input {
             flex: 1;
             background: transparent;
             border: 1px solid #555;
+            border-radius: 4px;
             color: inherit;
             font-family: inherit;
-            font-size: 0.7rem;
+            font-size: 0.85rem;
+            padding: 5px 8px;
+            outline: none;
+        }
+        .search-bar input:focus {
+            border-color: var(--accent, #df8a3e);
+        }
+        .search-bar .search-close {
+            background: none;
+            border: none;
+            color: inherit;
+            font-size: 1.1rem;
+            cursor: pointer;
+            opacity: 0.6;
+            padding: 2px 6px;
+        }
+        .search-bar .search-close:hover { opacity: 1; }
+        .search-bar .search-nav {
+            background: none;
+            border: none;
+            color: inherit;
+            font-size: 1rem;
+            cursor: pointer;
+            opacity: 0.5;
             padding: 2px 4px;
         }
-        .search-results {
-            background: var(--box-bg, #26292c);
-            padding: 4px;
-            margin-bottom: 4px;
+        .search-bar .search-nav:hover { opacity: 1; }
+        .search-bar .search-scope {
+            background: var(--accent, #df8a3e);
+            color: #000;
+            border: none;
             border-radius: 4px;
+            font-family: inherit;
+            font-size: 0.72rem;
+            font-weight: bold;
+            cursor: pointer;
+            padding: 3px 10px;
+            white-space: nowrap;
+            opacity: 0.55;
+        }
+        .search-bar .search-scope:hover { opacity: 0.8; }
+        .search-bar .search-scope.active {
+            opacity: 1;
+        }
+        .search-results .folder-group {
             font-size: 0.65rem;
-            max-height: 220px;
+            opacity: 0.5;
+            padding: 6px 6px 2px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }
+        .search-results .hit.current {
+            outline: 2px solid var(--accent, #df8a3e);
+            outline-offset: -2px;
+        }
+        .search-results {
+            display: none;
+            position: fixed;
+            top: 40px; left: 0; right: 0;
+            z-index: 1500;
+            background: var(--box-bg, #26292c);
+            border-bottom: 1px solid var(--accent, #df8a3e);
+            padding: 4px 12px 8px;
+            font-size: 0.75rem;
+            max-height: 280px;
             overflow-y: auto;
         }
         .search-results .hit {
-            padding: 3px 4px;
+            padding: 5px 6px;
             border-bottom: 1px solid rgba(255,255,255,0.08);
             cursor: pointer;
         }
-        .search-results .hit:hover { background: rgba(255,255,255,0.05); }
+        .search-results .hit:hover { background: rgba(255,255,255,0.06); }
         .search-results .hit .hit-title { font-weight: bold; }
-        .search-results .hit .hit-snippet { opacity: 0.75; font-size: 0.6rem; }
+        .search-results .hit .hit-snippet { opacity: 0.75; font-size: 0.7rem; }
         .search-results .hit mark {
             background: var(--accent, #df8a3e);
             color: #000;
-            padding: 0 1px;
+            padding: 0 2px;
+            border-radius: 2px;
+        }
+        /* ---- Keyboard hints bar --------------------------------------- */
+        .keyboard-hints {
+            display: flex;
+            gap: 16px;
+            padding: 3px 8px;
+            font-size: 0.65rem;
+            opacity: 0.45;
+            justify-content: flex-end;
+        }
+        .keyboard-hints span {
+            white-space: nowrap;
         }
         /* Git context badge — sits on the directory bar */
         .git-badge {
@@ -3213,8 +3368,10 @@ HTML_TEMPLATE = """
             });
         }
 
-        // ---- Local search ---------------------------------------------------
+        // ---- Search (local + global) ----------------------------------------
         let _searchTimer = null;
+        let _searchGlobal = false;
+        let _searchHitIndex = -1;
         function escapeHtml(s) {
             return String(s).replace(/[&<>"']/g, (c) => ({
                 '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -3222,47 +3379,85 @@ HTML_TEMPLATE = """
         }
         function highlight(text, query) {
             if (!query) return escapeHtml(text);
-            // Note: this string lives inside a Python triple-quoted block,
-            // so every backslash is doubled to survive Python's parser
-            // before JS sees the intended single-backslash regex escapes.
             const escQ = query.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
             const re = new RegExp(escQ, 'gi');
             return escapeHtml(text).replace(re, (m) => '<mark>' + m + '</mark>');
         }
+        window.toggleSearchScope = function() {
+            _searchGlobal = !_searchGlobal;
+            const btn = document.getElementById('searchScopeBtn');
+            btn.classList.toggle('active', _searchGlobal);
+            const input = document.getElementById('searchInput');
+            input.placeholder = _searchGlobal
+                ? 'Search all folders…'
+                : "Search this folder's notes…";
+            const q = input.value.trim();
+            if (q) runSearch(q);
+        };
+        window.searchNavigate = function(dir) {
+            const hits = document.querySelectorAll('#searchResults .hit');
+            if (!hits.length) return;
+            hits.forEach((h) => h.classList.remove('current'));
+            _searchHitIndex += dir;
+            if (_searchHitIndex < 0) _searchHitIndex = hits.length - 1;
+            if (_searchHitIndex >= hits.length) _searchHitIndex = 0;
+            const cur = hits[_searchHitIndex];
+            cur.classList.add('current');
+            cur.scrollIntoView({block: 'nearest'});
+            cur.click();
+        };
         async function runSearch(query) {
             const resultsBox = document.getElementById('searchResults');
+            _searchHitIndex = -1;
             if (!query) {
                 resultsBox.style.display = 'none';
                 resultsBox.innerHTML = '';
-                document.getElementById('searchClear').style.display = 'none';
                 return;
             }
-            document.getElementById('searchClear').style.display = 'inline';
             try {
-                const resp = await fetch('/api/search?q=' + encodeURIComponent(query));
-                const data = await resp.json();
-                if (!data.matches.length) {
-                    resultsBox.innerHTML = '<div class="hit"><em>No matches.</em></div>';
+                if (_searchGlobal) {
+                    const resp = await fetch('/api/search/global?q=' + encodeURIComponent(query));
+                    const data = await resp.json();
+                    if (!data.results.length) {
+                        resultsBox.innerHTML = '<div class="hit"><em>No matches across folders.</em></div>';
+                    } else {
+                        resultsBox.innerHTML = data.results.map((folder) => (
+                            '<div class="folder-group">' + escapeHtml(folder.folder_path) + '</div>' +
+                            folder.matches.map((m) => (
+                                '<div class="hit" data-folder="' + escapeHtml(folder.folder_path) + '">' +
+                                '<span class="hit-title">' + highlight(m.note_title || '(untitled)', query) + '</span>' +
+                                ' <span style="opacity:0.5;">&times;' + m.count + '</span>' +
+                                '<div class="hit-snippet">' + highlight(m.snippet, query) + '</div>' +
+                                '</div>'
+                            )).join('')
+                        )).join('');
+                    }
                 } else {
-                    resultsBox.innerHTML = data.matches.map((m) => (
-                        '<div class="hit" data-index="' + m.index + '">' +
-                        '<span class="hit-title">' + highlight(m.title || '(untitled)', query) + '</span>' +
-                        ' <span style="opacity:0.5;">[' + m.timestamp + '] ×' + m.count + '</span>' +
-                        '<div class="hit-snippet">' + highlight(m.snippet, query) + '</div>' +
-                        '</div>'
-                    )).join('');
-                    resultsBox.querySelectorAll('.hit').forEach((row) => {
-                        row.addEventListener('click', () => {
-                            const idx = row.getAttribute('data-index');
-                            const note = document.getElementById('note-' + idx);
-                            if (note) {
-                                note.classList.remove('collapsed');
-                                note.scrollIntoView({behavior: 'smooth', block: 'start'});
-                                note.style.outline = '2px solid var(--accent, #df8a3e)';
-                                setTimeout(() => { note.style.outline = ''; }, 1200);
-                            }
+                    const resp = await fetch('/api/search?q=' + encodeURIComponent(query));
+                    const data = await resp.json();
+                    if (!data.matches.length) {
+                        resultsBox.innerHTML = '<div class="hit"><em>No matches.</em></div>';
+                    } else {
+                        resultsBox.innerHTML = data.matches.map((m) => (
+                            '<div class="hit" data-index="' + m.index + '">' +
+                            '<span class="hit-title">' + highlight(m.title || '(untitled)', query) + '</span>' +
+                            ' <span style="opacity:0.5;">[' + m.timestamp + '] &times;' + m.count + '</span>' +
+                            '<div class="hit-snippet">' + highlight(m.snippet, query) + '</div>' +
+                            '</div>'
+                        )).join('');
+                        resultsBox.querySelectorAll('.hit').forEach((row) => {
+                            row.addEventListener('click', () => {
+                                const idx = row.getAttribute('data-index');
+                                const note = document.getElementById('note-' + idx);
+                                if (note) {
+                                    note.classList.remove('collapsed');
+                                    note.scrollIntoView({behavior: 'smooth', block: 'start'});
+                                    note.style.outline = '2px solid var(--accent, #df8a3e)';
+                                    setTimeout(() => { note.style.outline = ''; }, 1200);
+                                }
+                            });
                         });
-                    });
+                    }
                 }
                 resultsBox.style.display = 'block';
             } catch (e) {
@@ -3819,26 +4014,62 @@ HTML_TEMPLATE = """
             const notesContainer = document.getElementById('notesContainer');
             await typeset(notesContainer);
 
+            // Cheat-sheet helpers (global so onclick attributes work).
+            window.openCheatsheet = function() {
+                document.getElementById('cheatsheetOverlay').classList.add('active');
+            };
+            window.closeCheatsheet = function() {
+                document.getElementById('cheatsheetOverlay').classList.remove('active');
+            };
+            window.toggleCheatsheet = function() {
+                document.getElementById('cheatsheetOverlay').classList.toggle('active');
+            };
+
+            // Search bar helpers (global so onclick attributes work).
+            window.openSearchBar = function() {
+                const bar = document.getElementById('searchBar');
+                bar.classList.add('active');
+                const input = document.getElementById('searchInput');
+                input.focus();
+                input.select();
+            };
+            window.closeSearchBar = function() {
+                const bar = document.getElementById('searchBar');
+                bar.classList.remove('active');
+                const input = document.getElementById('searchInput');
+                input.value = '';
+                runSearch('');
+                document.getElementById('searchResults').style.display = 'none';
+            };
+
             // Global keyboard shortcuts.
             document.addEventListener('keydown', (e) => {
-                // ESC closes the side panel from anywhere on the page.
+                // ESC: close search bar, cheat sheet, or side panel (in priority order).
                 if (e.key === 'Escape') {
+                    const bar = document.getElementById('searchBar');
+                    if (bar && bar.classList.contains('active')) { closeSearchBar(); return; }
+                    const cs = document.getElementById('cheatsheetOverlay');
+                    if (cs && cs.classList.contains('active')) { closeCheatsheet(); return; }
                     const panel = document.getElementById('sidePanel');
                     if (panel && panel.classList.contains('open')) {
-                        if (document.activeElement && document.activeElement.id === 'searchInput') return;
                         closeSidePanel();
                     }
                 }
-                // `/` focuses the search box (skip when typing somewhere).
+                // `?` toggles cheat sheet; Ctrl/Cmd+? works even inside inputs.
+                if (e.key === '?') {
+                    const inInput = ['INPUT','TEXTAREA','SELECT'].includes(
+                        document.activeElement && document.activeElement.tagName);
+                    if (!inInput || e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        toggleCheatsheet();
+                    }
+                }
+                // `/` opens the search bar (skip when typing somewhere).
                 if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
                     const tag = document.activeElement && document.activeElement.tagName;
                     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-                    const search = document.getElementById('searchInput');
-                    if (search) {
-                        e.preventDefault();
-                        search.focus();
-                        search.select();
-                    }
+                    e.preventDefault();
+                    openSearchBar();
                 }
             });
 
@@ -3886,7 +4117,6 @@ HTML_TEMPLATE = """
 
             // Local search: debounce input -> /api/search.
             const searchInput = document.getElementById('searchInput');
-            const searchClear = document.getElementById('searchClear');
             if (searchInput) {
                 searchInput.addEventListener('input', () => {
                     clearTimeout(_searchTimer);
@@ -3894,17 +4124,10 @@ HTML_TEMPLATE = """
                     _searchTimer = setTimeout(() => runSearch(q), 150);
                 });
                 searchInput.addEventListener('keydown', (e) => {
-                    if (e.key === 'Escape') {
-                        searchInput.value = '';
-                        runSearch('');
-                    }
-                });
-            }
-            if (searchClear) {
-                searchClear.addEventListener('click', () => {
-                    searchInput.value = '';
-                    runSearch('');
-                    searchInput.focus();
+                    if (e.key === 'Escape') { closeSearchBar(); }
+                    else if (e.key === 'ArrowUp') { e.preventDefault(); searchNavigate(-1); }
+                    else if (e.key === 'ArrowDown') { e.preventDefault(); searchNavigate(1); }
+                    else if (e.key === 'Enter') { e.preventDefault(); searchNavigate(1); }
                 });
             }
 
@@ -3934,6 +4157,46 @@ HTML_TEMPLATE = """
                 }
             });
             
+            // Handle Enter: continue list / indent from previous line
+            noteContent.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                    const val = this.value;
+                    const pos = this.selectionStart;
+                    if (this.selectionStart !== this.selectionEnd) return;
+
+                    const lineStart = val.lastIndexOf('\\n', pos - 1) + 1;
+                    const line = val.substring(lineStart, pos);
+
+                    // Match leading whitespace + optional list marker
+                    const m = line.match(/^(\\s*)([-*+]\\s\\[[ x]\\]\\s|[-*+]\\s|\\d+\\.\\s)?/);
+                    if (!m || (!m[1] && !m[2])) return;
+
+                    const indent = m[1] || '';
+                    const marker = m[2] || '';
+                    const prefix = indent + marker;
+
+                    // If the line is ONLY the prefix (empty item), remove it instead
+                    if (line.trimEnd() === prefix.trimEnd()) {
+                        e.preventDefault();
+                        this.value = val.substring(0, lineStart) + '\\n' + val.substring(pos);
+                        this.selectionStart = this.selectionEnd = lineStart + 1;
+                        return;
+                    }
+
+                    // Increment numbered list markers
+                    let newPrefix = prefix;
+                    const numMatch = marker.match(/^(\\d+)\\.\\s$/);
+                    if (numMatch) {
+                        newPrefix = indent + (parseInt(numMatch[1]) + 1) + '. ';
+                    }
+
+                    e.preventDefault();
+                    const insert = '\\n' + newPrefix;
+                    this.value = val.substring(0, pos) + insert + val.substring(pos);
+                    this.selectionStart = this.selectionEnd = pos + insert.length;
+                }
+            });
+
             // Handle Tab in textarea
             noteContent.addEventListener('keydown', function(e) {
                 if (e.key === 'Tab') {
@@ -3999,6 +4262,19 @@ HTML_TEMPLATE = """
     </script>
 </head>
 <body>
+    <!-- Full-width search bar (toggled by / key) -->
+    <div id="searchBar" class="search-bar">
+        <span class="search-icon">&#x1F50D;</span>
+        <input type="text" id="searchInput"
+               placeholder="Search this folder's notes…"
+               autocomplete="off">
+        <button class="search-nav" onclick="searchNavigate(-1)" title="Previous match">&uarr;</button>
+        <button class="search-nav" onclick="searchNavigate(1)" title="Next match">&darr;</button>
+        <button id="searchScopeBtn" class="search-scope" onclick="toggleSearchScope()" title="Search all registered folders">All folders</button>
+        <button class="search-close" onclick="closeSearchBar()" title="Close (Esc)">&times;</button>
+    </div>
+    <div id="searchResults" class="search-results"></div>
+
     <div class="container">
         <div class="left-column">
             <div class="input-box">
@@ -4029,7 +4305,12 @@ Markdown basics:
     | a        | b        |
 - Code blocks: triple-backtick fences, optionally with a language hint
 - Math: single dollar signs for inline, double dollar signs for block (MathJax)
-- Press / anywhere to focus the search box."></textarea>
+"></textarea>
+                <div class="keyboard-hints">
+                    <span>/ search</span>
+                    <span>? cheat sheet</span>
+                    <span>Ctrl+Enter save</span>
+                </div>
             </div>
             <div id="notesContainer" class="notes-container"></div>
         </div>
@@ -4041,17 +4322,6 @@ Markdown basics:
                 <span class="directory-bar-content">{folder_path}&nbsp;</span>
                 <span id="gitBadge" class="git-badge" style="display:none;"></span>
             </div>
-
-            <!-- Local Search -->
-            <div class="search-box">
-                <input type="text" id="searchInput"
-                       placeholder="Search notes in this folder…"
-                       autocomplete="off">
-                <span id="searchClear"
-                      style="cursor:pointer;display:none;font-size:0.65rem;opacity:0.7;"
-                      title="Clear">&times;</span>
-            </div>
-            <div id="searchResults" class="search-results" style="display:none;"></div>
 
             <!-- Tasks Box -->
             <div id="activeTasks" class="task-box">
@@ -4088,6 +4358,60 @@ Markdown basics:
     <!-- Image Lightbox -->
     <div id="imageLightbox" class="image-lightbox">
         <img src="" alt="Full size preview">
+    </div>
+
+    <!-- Cheat Sheet Modal -->
+    <div id="cheatsheetOverlay" class="cheatsheet-overlay" onclick="if(event.target===this)closeCheatsheet()">
+      <div class="cheatsheet">
+        <button class="close-btn" onclick="closeCheatsheet()" title="Close">&times;</button>
+        <h2>NoteFlow Cheat Sheet</h2>
+
+        <h3>Keyboard Shortcuts</h3>
+        <table>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Enter</kbd></td><td>Save note (or send AI message)</td></tr>
+          <tr><td><kbd>Tab</kbd></td><td>Insert indent (in editor)</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Continue list / preserve indent</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Focus search box</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close panel / lightbox / this sheet</td></tr>
+          <tr><td><kbd>?</kbd></td><td>Toggle this cheat sheet</td></tr>
+        </table>
+
+        <h3>Markdown Formatting</h3>
+        <table>
+          <tr><td># H1 &nbsp; ## H2 &nbsp; ### H3</td><td>Headers</td></tr>
+          <tr><td>**bold** &nbsp; *italic* &nbsp; ~~strike~~</td><td>Inline styles</td></tr>
+          <tr><td>`code`</td><td>Inline code</td></tr>
+          <tr><td>```lang ... ```</td><td>Fenced code block</td></tr>
+          <tr><td>&gt; text</td><td>Blockquote</td></tr>
+          <tr><td>[text](url)</td><td>Link</td></tr>
+          <tr><td>![alt](image.jpg)</td><td>Image (or drag &amp; drop)</td></tr>
+          <tr><td>$x^2$ &nbsp; $$E=mc^2$$</td><td>Inline / block math (MathJax)</td></tr>
+          <tr><td>| A | B |</td><td>Tables (pipe syntax)</td></tr>
+        </table>
+
+        <h3>Lists</h3>
+        <table>
+          <tr><td>- item &nbsp; * item &nbsp; + item</td><td>Unordered list</td></tr>
+          <tr><td>1. item</td><td>Ordered list (auto-increments)</td></tr>
+          <tr><td>&nbsp;&nbsp;- sub-item</td><td>Indent 2 spaces for nesting</td></tr>
+        </table>
+
+        <h3>Tasks</h3>
+        <table>
+          <tr><td>- [ ] Do something</td><td>Unchecked task</td></tr>
+          <tr><td>- [x] Done</td><td>Completed task</td></tr>
+          <tr><td>!p1 &nbsp; !p2 &nbsp; !p3</td><td>Priority (1 = highest)</td></tr>
+          <tr><td>@2026-05-31</td><td>Due date</td></tr>
+          <tr><td>#tagname</td><td>Tag</td></tr>
+        </table>
+
+        <h3>Sigils (expanded at save time)</h3>
+        <table>
+          <tr><td>+https://example.com</td><td>Archive web page as local HTML</td></tr>
+          <tr><td>+file:path/to/file.py</td><td>Embed file as code block</td></tr>
+          <tr><td>+file:foo.py#10-25</td><td>Embed specific line range</td></tr>
+        </table>
+      </div>
     </div>
 
     <!-- Right-edge tab strip + unified side panel -->
