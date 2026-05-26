@@ -36,7 +36,7 @@ from . import sigils
 ###############################################################################
 # Constants & Configuration
 ###############################################################################
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 NOTE_SEPARATOR = "\n<!-- note -->\n"
 APP_PORT = None
 CURRENT_THEME = "dark-orange" # Default theme
@@ -407,6 +407,22 @@ class NoteManager:
             tasks.extend(note.get_unchecked_tasks())
         return tasks
 
+    def remove_asset_references(self, filename: str):
+        """Remove all markdown image/link references to a given asset filename."""
+        pattern = re.compile(
+            r'!\[[^\]]*\]\(<[^>]*/' + re.escape(filename) + r'>\)\n?'
+            r'|!\[[^\]]*\]\([^)]*/' + re.escape(filename) + r'\)\n?'
+        )
+        changed = False
+        for note in self.notes:
+            new_content = pattern.sub('', note.content)
+            if new_content != note.content:
+                note.content = new_content
+                changed = True
+        if changed:
+            self.needs_save = True
+            self.save()
+
     def add_note(self, title: str, content: str):
         """Add a new note"""
         note = Note(
@@ -672,20 +688,30 @@ def parse_markdown(content: str) -> str:
         src = token.attrGet('src')
         alt = token.content
         title = token.attrGet('title')
-        
+
         # Remove angle brackets if present (from drag-and-drop)
         src = src.strip('<>')
-        
+
         # Handle both local and remote images
         if src.startswith(('http://', 'https://')) or '/assets/images/' in src:
             img_url = src if src.startswith(('http://', 'https://', '/')) else f'/{src}'
             title_attr = f' title="{title}"' if title else ''
-            
-            # Wrap image in a link that opens in new window
+            escaped_url = html.escape(img_url, quote=True)
+
+            delete_btn = ''
+            if '/assets/images/' in img_url:
+                delete_btn = (
+                    f'<button class="image-delete-btn" '
+                    f'data-image-path="{escaped_url}" '
+                    f'title="Delete image">&times;</button>'
+                )
+
             return (
-                f'<a href="{img_url}" target="_blank" rel="noopener noreferrer">'
-                f'<img src="{img_url}" alt="{alt}"{title_attr}>'
-                f'</a>'
+                f'<div class="image-container">'
+                f'<img src="{img_url}" alt="{alt}"{title_attr} '
+                f'class="clickable-image" data-full-src="{escaped_url}">'
+                f'{delete_btn}'
+                f'</div>'
             )
         else:
             # For non-image files, render as a regular link
@@ -786,8 +812,8 @@ def parse_markdown(content: str) -> str:
     md.renderer.rules['math_block'] = render_math
     
     # Convert to HTML
-    html = md.render(content)
-    return html
+    rendered = md.render(content)
+    return rendered
 
 def validate_folder_path(folder_path_input: Optional[str] = None) -> Path:
     """
@@ -1491,6 +1517,74 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         "contentType": content_type
     }
 
+@app.delete("/api/delete-image")
+async def delete_image(request: Request):
+    data = await request.json()
+    image_path = data.get("imagePath", "")
+    if image_path.startswith("/"):
+        image_path = image_path[1:]
+
+    folder_path = request.app.state.folder_path
+    full_path = (folder_path / image_path).resolve()
+    assets_images = (folder_path / "assets" / "images").resolve()
+
+    if not str(full_path).startswith(str(assets_images) + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid image path")
+
+    if full_path.exists():
+        full_path.unlink()
+
+    note_manager.remove_asset_references(full_path.name)
+    return {"status": "success"}
+
+@app.get("/api/uploaded-files")
+async def list_uploaded_files(request: Request):
+    folder_path = request.app.state.folder_path
+    notes_path = folder_path / "notes.md"
+    notes_content = notes_path.read_text(encoding="utf-8") if notes_path.exists() else ""
+
+    files = []
+    for subdir in ("images", "files"):
+        assets_dir = folder_path / "assets" / subdir
+        if not assets_dir.exists():
+            continue
+        for entry in sorted(assets_dir.iterdir()):
+            if not entry.is_file():
+                continue
+            web_path = f"/assets/{subdir}/{entry.name}"
+            content_type = mimetypes.guess_type(entry.name)[0] or ""
+            is_image = content_type.startswith("image/")
+            referenced = entry.name in notes_content
+            files.append({
+                "name": entry.name,
+                "path": web_path,
+                "type": subdir,
+                "isImage": is_image,
+                "sizeBytes": entry.stat().st_size,
+                "referenced": referenced,
+            })
+    return {"files": files}
+
+@app.delete("/api/delete-asset")
+async def delete_asset(request: Request):
+    data = await request.json()
+    asset_path = data.get("assetPath", "")
+    if asset_path.startswith("/"):
+        asset_path = asset_path[1:]
+
+    folder_path = request.app.state.folder_path
+    full_path = (folder_path / asset_path).resolve()
+    assets_root = (folder_path / "assets").resolve()
+
+    if not str(full_path).startswith(str(assets_root) + os.sep):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if full_path.exists():
+        full_path.unlink()
+
+    note_manager.remove_asset_references(full_path.name)
+    return {"status": "success"}
+
 ###############################################################################
 # HTML & CSS Templates
 ###############################################################################
@@ -2142,12 +2236,72 @@ THEMED_STYLES = """
             text-decoration: underline;
         }}
         .markdown-body img {{
-            max-width: 100%;
+            max-width: 50%;
             max-height: 400px;
             width: auto;
             height: auto;
             display: block;
             margin: 10px auto;
+        }}
+        .image-container {{
+            position: relative;
+            display: block;
+            width: fit-content;
+            margin: 10px auto;
+        }}
+        .image-container .clickable-image {{
+            cursor: pointer;
+            transition: opacity 0.15s;
+            margin: 0;
+        }}
+        .image-container .clickable-image:hover {{
+            opacity: 0.85;
+        }}
+        .image-delete-btn {{
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            width: 24px;
+            height: 24px;
+            background: rgba(180, 30, 30, 0.85);
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            line-height: 22px;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.15s;
+            padding: 0;
+            font-family: 'space_monoregular', monospace;
+        }}
+        .image-container:hover .image-delete-btn {{
+            opacity: 1;
+        }}
+        .image-delete-btn:hover {{
+            background: rgba(220, 40, 40, 1);
+        }}
+        .image-lightbox {{
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+            cursor: zoom-out;
+        }}
+        .image-lightbox.active {{
+            display: flex;
+        }}
+        .image-lightbox img {{
+            max-width: 95%;
+            max-height: 95%;
+            object-fit: contain;
+            border-radius: 4px;
         }}
         /* ---- Right-edge tab strip + unified side panel ----------------- */
         /* Tabs anchored low-right (admin panel's old spot), stacked upward. */
@@ -2268,6 +2422,65 @@ THEMED_STYLES = """
         #commitsList .commit-author {{ margin-left: auto; opacity: 0.6; }}
         #commitsList .commit-subject {{
             font-size: 0.75rem; line-height: 1.35;
+        }}
+
+        /* Uploaded files panel */
+        #uploadedFilesList {{ display: flex; flex-direction: column; gap: 6px; }}
+        #uploadedFilesList .files-empty {{
+            opacity: 0.55; font-style: italic; text-align: center; padding: 20px 0;
+        }}
+        .uploaded-file {{
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 8px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.025);
+            border-left: 2px solid {colors[accent]};
+        }}
+        .uploaded-file.orphan {{
+            border-left-color: #885533;
+        }}
+        .uploaded-file-thumb {{
+            width: 36px; height: 36px;
+            object-fit: cover; border-radius: 3px;
+            flex-shrink: 0; cursor: pointer;
+        }}
+        .uploaded-file-icon {{
+            width: 36px; height: 36px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.2rem; flex-shrink: 0;
+            opacity: 0.5;
+        }}
+        .uploaded-file-info {{
+            flex: 1; min-width: 0; overflow: hidden;
+        }}
+        .uploaded-file-name {{
+            font-size: 0.72rem; line-height: 1.3;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }}
+        .uploaded-file-meta {{
+            font-size: 0.6rem; opacity: 0.55;
+            display: flex; gap: 6px;
+        }}
+        .uploaded-file-status {{
+            font-size: 0.58rem; padding: 1px 5px;
+            border-radius: 3px; white-space: nowrap;
+        }}
+        .uploaded-file-status.in-use {{
+            background: rgba(80,180,80,0.15); color: #7c7;
+        }}
+        .uploaded-file-status.orphan {{
+            background: rgba(200,120,50,0.15); color: #c84;
+        }}
+        .uploaded-file-delete {{
+            background: none; border: none; color: #a55;
+            cursor: pointer; font-size: 0.85rem; padding: 2px 4px;
+            opacity: 0.5; transition: opacity 0.15s;
+            font-family: inherit;
+        }}
+        .uploaded-file-delete:hover {{ opacity: 1; color: #e44; }}
+        .files-summary {{
+            font-size: 0.65rem; opacity: 0.5;
+            margin-bottom: 8px; text-align: center;
         }}
 
         #themeSelector {{
@@ -2744,6 +2957,34 @@ HTML_TEMPLATE = """
             }
         }
 
+        async function deleteImage(imagePath) {
+            if (!confirm('Permanently delete this image from disk?')) return;
+            try {
+                const response = await fetch('/api/delete-image', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ imagePath })
+                });
+                if (!response.ok) throw new Error('Failed to delete image');
+                await updateNotes();
+                const notesContainer = document.getElementById('notesContainer');
+                await typeset(notesContainer);
+            } catch (error) {
+                console.error('Error deleting image:', error);
+                alert('Failed to delete image');
+            }
+        }
+
+        function openImageLightbox(src) {
+            const lb = document.getElementById('imageLightbox');
+            lb.querySelector('img').src = src;
+            lb.classList.add('active');
+        }
+
+        function closeImageLightbox() {
+            document.getElementById('imageLightbox').classList.remove('active');
+        }
+
         // Render a task's text with inline metadata markers (!p1, @YYYY-MM-DD,
         // #tag) replaced by styled chips. Returns an HTML string.
         function renderTaskText(text) {
@@ -3119,6 +3360,7 @@ HTML_TEMPLATE = """
                 if (ai) ai.focus();
             }
             if (name === 'commits') loadCommits();
+            if (name === 'files') loadUploadedFiles();
         }
 
         function closeSidePanel() {
@@ -3177,6 +3419,73 @@ HTML_TEMPLATE = """
                 )).join('');
             } catch (e) {
                 list.innerHTML = '<div class="commits-empty" style="color:#c33;">' + escapeHtml(String(e)) + '</div>';
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        }
+
+        async function loadUploadedFiles() {
+            const list = document.getElementById('uploadedFilesList');
+            if (!list) return;
+            list.innerHTML = '<div class="files-empty">Loading…</div>';
+            try {
+                const resp = await fetch('/api/uploaded-files');
+                const data = await resp.json();
+                if (!data.files.length) {
+                    list.innerHTML = '<div class="files-empty">No uploaded files.</div>';
+                    return;
+                }
+                const orphans = data.files.filter(f => !f.referenced).length;
+                let html = '<div class="files-summary">' +
+                    data.files.length + ' file' + (data.files.length !== 1 ? 's' : '') +
+                    (orphans ? ' · <span style="color:#c84;">' + orphans + ' orphaned</span>' : '') +
+                    '</div>';
+                html += data.files.map(f => {
+                    const thumb = f.isImage
+                        ? '<img class="uploaded-file-thumb clickable-image" src="' + escapeHtml(f.path) + '" alt="" data-full-src="' + escapeHtml(f.path) + '">'
+                        : '<div class="uploaded-file-icon">📎</div>';
+                    const status = f.referenced
+                        ? '<span class="uploaded-file-status in-use">in use</span>'
+                        : '<span class="uploaded-file-status orphan">orphan</span>';
+                    const cls = f.referenced ? 'uploaded-file' : 'uploaded-file orphan';
+                    return '<div class="' + cls + '">' +
+                        thumb +
+                        '<div class="uploaded-file-info">' +
+                          '<div class="uploaded-file-name" title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + '</div>' +
+                          '<div class="uploaded-file-meta">' +
+                            '<span>' + formatBytes(f.sizeBytes) + '</span>' +
+                            '<span>' + f.type + '</span>' +
+                            status +
+                          '</div>' +
+                        '</div>' +
+                        '<button class="uploaded-file-delete" data-asset-path="' + escapeHtml(f.path) + '" title="Delete file">&times;</button>' +
+                      '</div>';
+                }).join('');
+                list.innerHTML = html;
+            } catch (e) {
+                list.innerHTML = '<div class="files-empty" style="color:#c33;">' + escapeHtml(String(e)) + '</div>';
+            }
+        }
+
+        async function deleteUploadedFile(assetPath) {
+            if (!confirm('Permanently delete this file from disk?')) return;
+            try {
+                const resp = await fetch('/api/delete-asset', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ assetPath })
+                });
+                if (!resp.ok) throw new Error('Failed to delete file');
+                loadUploadedFiles();
+                await updateNotes();
+                const notesContainer = document.getElementById('notesContainer');
+                await typeset(notesContainer);
+            } catch (e) {
+                alert('Failed to delete file: ' + e.message);
             }
         }
 
@@ -3542,6 +3851,28 @@ HTML_TEMPLATE = """
                 collapsed.classList.remove('collapsed');
             });
 
+            // Image lightbox: click image to view full size.
+            notesContainer.addEventListener('click', (e) => {
+                const img = e.target.closest('.clickable-image');
+                if (img) { openImageLightbox(img.dataset.fullSrc); return; }
+                const del = e.target.closest('.image-delete-btn');
+                if (del) { deleteImage(del.dataset.imagePath); }
+            });
+
+            // Close lightbox on click or Escape.
+            document.getElementById('imageLightbox').addEventListener('click', closeImageLightbox);
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') closeImageLightbox();
+            });
+
+            // Uploaded files panel: delegate clicks for thumbnails and delete.
+            document.getElementById('uploadedFilesList').addEventListener('click', (e) => {
+                const img = e.target.closest('.clickable-image');
+                if (img) { openImageLightbox(img.dataset.fullSrc); return; }
+                const del = e.target.closest('.uploaded-file-delete');
+                if (del) deleteUploadedFile(del.dataset.assetPath);
+            });
+
             // Directory bar: click anywhere on it to copy the folder path.
             const dirBar = document.getElementById('directoryBar');
             if (dirBar) {
@@ -3754,12 +4085,18 @@ Markdown basics:
         </div>
     </div>
 
+    <!-- Image Lightbox -->
+    <div id="imageLightbox" class="image-lightbox">
+        <img src="" alt="Full size preview">
+    </div>
+
     <!-- Right-edge tab strip + unified side panel -->
     <nav id="rightTabs" aria-label="Side panels">
         <button data-panel="fonts" onclick="togglePanel('fonts')">fonts</button>
         <button data-panel="admin" onclick="togglePanel('admin')">admin</button>
         <button data-panel="ai" onclick="togglePanel('ai')">ai</button>
         <button data-panel="commits" onclick="togglePanel('commits')">commits</button>
+        <button data-panel="files" onclick="togglePanel('files')">files</button>
     </nav>
     <aside id="sidePanel" data-active="">
         <header>
@@ -3862,6 +4199,14 @@ Markdown basics:
         <div class="pane" data-panel="commits">
             <p class="pane-help">Recent commits in the current folder's git repo.</p>
             <div id="commitsList"><div class="commits-empty">Loading…</div></div>
+        </div>
+
+        <div class="pane" data-panel="files">
+            <p class="pane-help">
+                All uploaded images and files. Orphaned files (not referenced
+                in any note) are flagged so you can clean them up.
+            </p>
+            <div id="uploadedFilesList"><div class="files-empty">Loading…</div></div>
         </div>
     </aside>
 </body>
