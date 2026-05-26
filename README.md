@@ -4,7 +4,22 @@
 
 NoteFlow is a lightweight, Markdown-based note-taking application with task management capabilities. It runs locally, stores everything in a single `notes.md` file per folder, and stays out of your way. One Python package, no cloud, no account.
 
-## What's new in 0.4.0
+## What's new in 0.6.0
+
+### 0.6.0 — Smart editing & cheat sheet
+
+- **Smart Enter** — pressing Enter in the editor continues list markers (`-`, `*`, `+`, `1.`, `- [ ]`), preserves indentation, and auto-increments numbered lists. A second Enter on an empty marker clears it.
+- **Cheat sheet modal** — press `?` (or `Ctrl+?` while editing) to see all keyboard shortcuts, Markdown syntax, task tokens, and sigils in one overlay.
+- **Full-width search bar** — `/` opens a fixed top bar with up/down arrow navigation, Enter to cycle matches, and an "All folders" toggle for cross-folder search.
+- **Keyboard hints bar** — subtle always-visible hints below the editor for `/`, `?`, and `Ctrl+Enter`.
+
+### 0.5.0 — Image management
+
+- **Image lightbox** — images in notes render at 50 % width; click to expand full-size.
+- **Image delete** — hover an image to reveal a delete button that removes the file from disk and strips the Markdown reference from `notes.md`.
+- **Uploaded files panel** — a new "files" side tab lists all uploaded assets with thumbnails, size, and in-use / orphan status for easy cleanup.
+
+### 0.4.0 — Feature parity with noteflow-go
 
 A major release that backports the feature surface from [noteflow-go](https://github.com/Xafloc/NoteFlow-Go):
 
@@ -45,7 +60,10 @@ A major release that backports the feature surface from [noteflow-go](https://gi
 - **🔖 Inline task metadata** — `!p1` priorities, `@YYYY-MM-DD` due dates, `#tag` tags, rendered as colored chips
 - **🌐 Cross-folder global tasks** — register multiple project folders, see every open task in one place
 - **🤖 AI assist** — chat your notes via any OpenAI-compatible endpoint
-- **🔍 Search** — instant local search; `/` shortcut to focus from anywhere
+- **⌨️ Smart Enter** — list markers, indentation, and numbered-list continuation while you type
+- **📖 Cheat sheet** — press `?` for a quick-reference overlay of shortcuts, syntax, and sigils
+- **🔍 Search** — full-width search bar with match navigation and cross-folder toggle
+- **🖼️ Image management** — lightbox preview, hover-to-delete, and an uploaded-files panel with orphan detection
 - **🔗 Web archiving** — prefix any URL with `+` to save a self-contained local copy
 - **📎 File embed sigil** — `+file:path#10-25` embeds source code at save time
 - **🚀 CLI** — `noteflow append`, `noteflow tasks` with filters / saved views / JSON output
@@ -161,8 +179,10 @@ The AI sees *this folder's* `notes.md` as a system prompt, plus your conversatio
 ### Keyboard shortcuts
 
 - `Ctrl+Enter` / `Cmd+Enter` — save the current note
-- `/` — focus the search box (anywhere on the page)
-- `Esc` — close the active side panel (or clear the search box)
+- `Enter` — smart continuation: repeats list markers (`-`, `*`, `+`, `1.`, `- [ ]`), preserves indentation, auto-increments numbered lists
+- `/` — open the full-width search bar (up/down to navigate, Enter to cycle)
+- `?` — open the cheat sheet (Markdown syntax, shortcuts, sigils)
+- `Esc` — close the active side panel, search bar, or cheat sheet
 
 ### CLI
 
