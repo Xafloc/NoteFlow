@@ -36,7 +36,7 @@ from . import sigils
 ###############################################################################
 # Constants & Configuration
 ###############################################################################
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 NOTE_SEPARATOR = "\n<!-- note -->\n"
 APP_PORT = None
 CURRENT_THEME = "dark-orange" # Default theme
@@ -676,7 +676,7 @@ def parse_markdown(content: str) -> str:
     md.enable('inline')       # Enable inline-level rules
    
     # Use the dollar math plugin
-    md.use(dollarmath_plugin)
+    md.use(dollarmath_plugin, allow_digits=False)
 
     # Define the render_math function to handle math tokens
     def render_math(tokens, idx, options, env):
@@ -4545,7 +4545,7 @@ Markdown basics:
           <tr><td>&gt; text</td><td>Blockquote</td></tr>
           <tr><td>[text](url)</td><td>Link</td></tr>
           <tr><td>![alt](image.jpg)</td><td>Image (or drag &amp; drop)</td></tr>
-          <tr><td>$x^2$ &nbsp; $$E=mc^2$$</td><td>Inline / block math (MathJax)</td></tr>
+          <tr><td><code>$x^2$</code> &nbsp; <code>$$E=mc^2$$</code></td><td>Inline / block math (MathJax)</td></tr>
           <tr><td>| A | B |</td><td>Tables (pipe syntax)</td></tr>
         </table>
 
