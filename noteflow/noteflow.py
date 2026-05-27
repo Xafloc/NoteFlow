@@ -36,7 +36,7 @@ from . import sigils
 ###############################################################################
 # Constants & Configuration
 ###############################################################################
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 NOTE_SEPARATOR = "\n<!-- note -->\n"
 APP_PORT = None
 CURRENT_THEME = "dark-orange" # Default theme
@@ -403,7 +403,8 @@ class NoteManager:
         """Save notes to disk if modified"""
         if self.needs_save:
             content = self.render_notes()
-            self.file_path.write_text(content, encoding='utf-8')
+            with open(self.file_path, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(content)
             self.needs_save = False
 
     def render_notes(self) -> str:
@@ -488,7 +489,7 @@ class Note:
             timestamp = datetime.now()
             title = header
 
-        content = lines[1] if len(lines) > 1 else ''
+        content = lines[1].strip() if len(lines) > 1 else ''
         return cls(title, content, timestamp, manager)
 
     def _parse_tasks(self):
@@ -685,11 +686,9 @@ def parse_markdown(content: str) -> str:
         is_block = token.type == 'math_block'
         
         if is_block:
-            # Block math
-            return f'<div class="math-display">$${content}$$</div>'
+            return f'<div class="math-display">\\[{content}\\]</div>'
         else:
-            # Inline math
-            return f'<span class="math-inline">${content}$</span>'
+            return f'<span class="math-inline">\\({content}\\)</span>'
         
     # Set the math renderers
     md.renderer.rules['math_inline'] = render_math
@@ -746,9 +745,9 @@ def parse_markdown(content: str) -> str:
         is_block = token.type == 'math_block'
         
         if is_block:
-            return f'<div class="math-display">$${content}$$</div>'
+            return f'<div class="math-display">\\[{content}\\]</div>'
         else:
-            return f'<span class="math-inline">${content}$</span>'
+            return f'<span class="math-inline">\\({content}\\)</span>'
 
     # Custom checkbox rule
     def checkbox_replace(state, silent):
@@ -921,7 +920,8 @@ async def get_notes():
 @app.post("/api/notes")
 async def add_note(request: Request, title: str = Form(...), content: str = Form(...)):
     """Add a new note"""
-    
+    content = content.replace('\r\n', '\n').replace('\r', '\n')
+
     folder_path = request.app.state.folder_path
 
     # Expand +file: sigils first so any embedded code is in place before
@@ -970,6 +970,7 @@ async def update_note(note_index: int, title: str = Form(...), content: str = Fo
     """Update an existing note"""
     try:
         note = note_manager.notes[note_index]
+        content = content.replace('\r\n', '\n').replace('\r', '\n')
 
         content = sigils.expand_file_sigils(content, note_manager.base_path)
 
@@ -4140,9 +4141,9 @@ HTML_TEMPLATE = """
 
         window.MathJax = {
             tex: {
-                inlineMath: [['$', '$']],
-                displayMath: [['$$', '$$']],
-                processEscapes: true
+                inlineMath: [['\\\\(', '\\\\)']],
+                displayMath: [['\\\\[', '\\\\]']],
+                processEscapes: false
             },
             startup: {
                 pageReady: () => {
@@ -4150,7 +4151,7 @@ HTML_TEMPLATE = """
                 }
             },
             options: {
-                skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+                skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
             },
             svg: {
                 fontCache: 'global'
