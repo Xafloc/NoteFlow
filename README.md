@@ -4,7 +4,11 @@
 
 NoteFlow is a lightweight, Markdown-based note-taking application with task management capabilities. It runs locally, stores everything in a single `notes.md` file per folder, and stays out of your way. One Python package, no cloud, no account.
 
-## What's new in 0.6.0
+## What's new
+
+### 0.7.0 — Autosave
+
+- **Autosave** — notes are automatically saved at a configurable interval (1, 3, or 5 minutes). Works for both new and existing notes — the timer starts as soon as you type in the editor. On by default; toggle and configure in the admin panel. A brief "autosaved" indicator flashes next to the Save button after each save.
 
 ### 0.6.0 — Smart editing & cheat sheet
 
@@ -60,6 +64,7 @@ A major release that backports the feature surface from [noteflow-go](https://gi
 - **🔖 Inline task metadata** — `!p1` priorities, `@YYYY-MM-DD` due dates, `#tag` tags, rendered as colored chips
 - **🌐 Cross-folder global tasks** — register multiple project folders, see every open task in one place
 - **🤖 AI assist** — chat your notes via any OpenAI-compatible endpoint
+- **💾 Autosave** — automatic periodic save while editing (configurable interval, toggleable in admin)
 - **⌨️ Smart Enter** — list markers, indentation, and numbered-list continuation while you type
 - **📖 Cheat sheet** — press `?` for a quick-reference overlay of shortcuts, syntax, and sigils
 - **🔍 Search** — full-width search bar with match navigation and cross-folder toggle
@@ -221,7 +226,7 @@ Per user (shared across all folders):
 
 ```
 ~/.config/noteflow-py/        # Linux; on macOS: ~/Library/Application Support/noteflow-py/
-├── noteflow.json             # theme, font scales, AI config (key, endpoint, model)
+├── noteflow.json             # theme, font scales, autosave, AI config (key, endpoint, model)
 ├── tasks.db                  # SQLite cache for cross-folder global tasks
 └── task_views.json           # saved CLI filter combinations
 ```
