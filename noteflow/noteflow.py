@@ -36,7 +36,7 @@ from . import sigils
 ###############################################################################
 # Constants & Configuration
 ###############################################################################
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 NOTE_SEPARATOR = "\n<!-- note -->\n"
 APP_PORT = None
 CURRENT_THEME = "dark-orange" # Default theme
@@ -213,6 +213,11 @@ FONT_SCALE_SECTIONS = ("notes", "tasks", "links")
 FONT_SCALE_MIN = 0.8
 FONT_SCALE_MAX = 1.6
 
+AUTOSAVE_INTERVALS = (1, 3, 5)
+
+def _default_autosave():
+    return {"enabled": True, "interval": 1}
+
 def _default_font_scales():
     return {s: 1.0 for s in FONT_SCALE_SECTIONS}
 
@@ -230,6 +235,7 @@ def load_config():
     default_config = {
         "theme": "dark-orange",
         "font_scales": _default_font_scales(),
+        "autosave": _default_autosave(),
         "ai": dict(ai_module.DEFAULT_AI_CONFIG),
     }
 
@@ -244,6 +250,12 @@ def load_config():
             scales = config.get('font_scales') or {}
             config['font_scales'] = {
                 s: _clamp_font_scale(scales.get(s, 1.0)) for s in FONT_SCALE_SECTIONS
+            }
+            # Normalize autosave — fill in defaults for missing keys.
+            raw_as = config.get('autosave') or {}
+            config['autosave'] = {
+                "enabled": bool(raw_as.get("enabled", True)),
+                "interval": raw_as.get("interval", 1) if raw_as.get("interval") in AUTOSAVE_INTERVALS else 1,
             }
             # Normalize AI block — fill in any missing keys.
             config['ai'] = ai_module.merge_ai_config(config)
@@ -274,6 +286,7 @@ CURRENT_THEME = config.get('theme', 'light-blue')
 if CURRENT_THEME not in THEMES:
     CURRENT_THEME = 'dark-orange'
 FONT_SCALES = config.get('font_scales') or _default_font_scales()
+AUTOSAVE = config.get('autosave') or _default_autosave()
 AI_CONFIG = ai_module.merge_ai_config(config)
 
 def get_git_context(folder_path: Path) -> Dict:
@@ -923,7 +936,7 @@ async def add_note(request: Request, title: str = Form(...), content: str = Form
 
     note_manager.add_note(title, content)
     note_manager.save()
-    return {"status": "success"}
+    return {"status": "success", "note_index": 0}
 
 @app.delete("/api/notes/{note_index}")
 async def delete_note(note_index: int = FastAPIPath(...)):
@@ -1265,6 +1278,33 @@ async def set_font_scales(request: Request):
     cfg['font_scales'] = new_scales
     save_config(cfg)
     return {"status": "success", "scales": new_scales}
+
+@app.get("/api/autosave")
+async def get_autosave():
+    """Return the current autosave settings."""
+    return dict(AUTOSAVE)
+
+@app.post("/api/autosave")
+async def set_autosave(request: Request):
+    """Update autosave settings and persist them."""
+    global AUTOSAVE
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected JSON object")
+
+    enabled = body.get("enabled", AUTOSAVE["enabled"])
+    interval = body.get("interval", AUTOSAVE["interval"])
+    if interval not in AUTOSAVE_INTERVALS:
+        raise HTTPException(status_code=400, detail=f"interval must be one of {AUTOSAVE_INTERVALS}")
+
+    AUTOSAVE = {"enabled": bool(enabled), "interval": int(interval)}
+    cfg = load_config()
+    cfg['autosave'] = dict(AUTOSAVE)
+    save_config(cfg)
+    return {"status": "success", **AUTOSAVE}
 
 @app.get("/api/git-context")
 async def api_git_context(request: Request):
@@ -2980,6 +3020,92 @@ HTML_TEMPLATE = """
     </style>
     <script>
         const CURRENT_THEME = '""" + CURRENT_THEME + """';
+        let _autosaveEnabled = """ + ("true" if AUTOSAVE.get("enabled", True) else "false") + """;
+        let _autosaveInterval = """ + str(AUTOSAVE.get("interval", 1)) + """;
+        let _autosaveTimer = null;
+        let _autosaveOrigTitle = '';
+        let _autosaveOrigContent = '';
+
+        function _autosaveStartTracking() {
+            _autosaveStopTracking();
+            if (!_autosaveEnabled) return;
+            _autosaveOrigTitle = document.getElementById('noteTitle').value;
+            _autosaveOrigContent = document.getElementById('noteContent').value;
+            _autosaveTimer = setInterval(_autosaveTick, _autosaveInterval * 60000);
+        }
+
+        function _autosaveStopTracking() {
+            if (_autosaveTimer) { clearInterval(_autosaveTimer); _autosaveTimer = null; }
+            _autosaveIndicator(false);
+        }
+
+        function _autosaveMaybeStart() {
+            if (!_autosaveEnabled || _autosaveTimer) return;
+            const content = document.getElementById('noteContent').value.trim();
+            if (content) _autosaveStartTracking();
+        }
+
+        function _autosaveTick() {
+            const textarea = document.getElementById('noteContent');
+            const curTitle = document.getElementById('noteTitle').value;
+            const curContent = textarea.value.trim();
+            if (!curContent) return;
+            if (curTitle === _autosaveOrigTitle && curContent === _autosaveOrigContent) return;
+            _autosaveOrigTitle = curTitle;
+            _autosaveOrigContent = curContent;
+            const editIndex = textarea.getAttribute('data-edit-index');
+            if (editIndex !== null) {
+                _autosaveExecUpdate(editIndex, curTitle, curContent);
+            } else {
+                _autosaveExecCreate(curTitle, curContent);
+            }
+        }
+
+        async function _autosaveExecUpdate(editIndex, title, content) {
+            try {
+                const formData = new FormData();
+                formData.append('title', title);
+                formData.append('content', content);
+                const resp = await fetch('/api/notes/' + editIndex, { method: 'PUT', body: formData });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                _autosaveIndicator(true);
+                await updateNotes();
+                const notesContainer = document.getElementById('notesContainer');
+                await typeset(notesContainer);
+            } catch (e) {
+                console.error('Autosave failed:', e);
+            }
+        }
+
+        async function _autosaveExecCreate(title, content) {
+            try {
+                const formData = new FormData();
+                formData.append('title', title);
+                formData.append('content', content);
+                const resp = await fetch('/api/notes', { method: 'POST', body: formData });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                document.getElementById('noteContent').setAttribute('data-edit-index', data.note_index);
+                _autosaveIndicator(true);
+                await updateNotes();
+                const notesContainer = document.getElementById('notesContainer');
+                await typeset(notesContainer);
+            } catch (e) {
+                console.error('Autosave failed:', e);
+            }
+        }
+
+        function _autosaveIndicator(show) {
+            let el = document.getElementById('autosaveIndicator');
+            if (!el) return;
+            if (show) {
+                el.textContent = 'autosaved';
+                el.style.opacity = '1';
+                setTimeout(() => { el.style.opacity = '0'; }, 2000);
+            } else {
+                el.style.opacity = '0';
+            }
+        }
 
         // Core functionality
 
@@ -3026,6 +3152,7 @@ HTML_TEMPLATE = """
                 });
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
 
+                _autosaveStopTracking();
                 document.getElementById('noteTitle').value = '';
                 document.getElementById('noteContent').value = '';
                 document.getElementById('noteContent').removeAttribute('data-edit-index');
@@ -3066,6 +3193,7 @@ HTML_TEMPLATE = """
                 
                 // Optional: Scroll to the input area
                 document.getElementById('noteContent').scrollIntoView({ behavior: 'smooth' });
+                _autosaveStartTracking();
             } catch (error) {
                 console.error('Error loading note for edit:', error);
                 alert('Failed to load note for editing');
@@ -3258,6 +3386,34 @@ HTML_TEMPLATE = """
                 console.error('Error saving theme:', error);
                 alert('Failed to save theme');
             }
+        }
+
+        async function saveAutosaveSettings() {
+            const enabled = document.getElementById('autosaveToggle').checked;
+            const interval = parseInt(document.getElementById('autosaveIntervalSelect').value, 10);
+            try {
+                const resp = await fetch('/api/autosave', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled, interval})
+                });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                _autosaveEnabled = enabled;
+                _autosaveInterval = interval;
+                if (_autosaveTimer) {
+                    _autosaveStartTracking();
+                }
+            } catch (e) {
+                console.error('Error saving autosave settings:', e);
+                alert('Failed to save autosave settings');
+            }
+        }
+
+        function _initAutosaveAdmin() {
+            const toggle = document.getElementById('autosaveToggle');
+            const select = document.getElementById('autosaveIntervalSelect');
+            if (toggle) toggle.checked = _autosaveEnabled;
+            if (select) select.value = String(_autosaveInterval);
         }
 
         async function shutdownServer() {
@@ -4010,6 +4166,9 @@ HTML_TEMPLATE = """
             // Theme + font sliders are populated lazily when their tab opens;
             // the actual theme and font sizes are applied via server-rendered
             // CSS variables, so the page already looks correct.
+            _initAutosaveAdmin();
+            document.getElementById('noteContent').addEventListener('input', _autosaveMaybeStart);
+            document.getElementById('noteTitle').addEventListener('input', _autosaveMaybeStart);
 
             const notesContainer = document.getElementById('notesContainer');
             await typeset(notesContainer);
@@ -4280,6 +4439,7 @@ HTML_TEMPLATE = """
             <div class="input-box">
                 <div class="title-input-container">
                     <input type="text" id="noteTitle" name="noteTitle" placeholder="Enter note title here...">
+                    <span id="autosaveIndicator" style="font-size:0.7rem;opacity:0;transition:opacity 0.4s;color:var(--accent,#e8a020);margin-right:6px;white-space:nowrap;">autosaved</span>
                     <button id="saveNoteButton" class="save-note-button" onclick="addNote()">Save Note</button>
                 </div>
                 <textarea id="noteContent" placeholder="Create note in MARKDOWN format... [Ctrl+Enter to save]
@@ -4469,6 +4629,28 @@ Markdown basics:
             <label class="pane-label">Theme</label>
             <select id="themeSelector"></select>
             <button class="pane-button" onclick="saveTheme()">Save theme</button>
+
+            <hr style="border:none;border-top:1px solid rgba(255,255,255,0.1);margin:16px 0;">
+
+            <label class="pane-label">Autosave</label>
+            <p class="pane-help" style="margin-top:0;">
+                Automatically save the note you are editing at a regular interval.
+            </p>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                <label style="display:flex;align-items:center;gap:6px;font-size:0.8rem;cursor:pointer;">
+                    <input type="checkbox" id="autosaveToggle"> Enabled
+                </label>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                <label style="font-size:0.75rem;opacity:0.7;">Interval:</label>
+                <select id="autosaveIntervalSelect" style="font-size:0.8rem;">
+                    <option value="1">1 minute</option>
+                    <option value="3">3 minutes</option>
+                    <option value="5">5 minutes</option>
+                </select>
+            </div>
+            <button class="pane-button" onclick="saveAutosaveSettings()">Save autosave</button>
+
             <div style="flex:1;"></div>
             <button class="pane-button danger" onclick="shutdownServer()">Shutdown server</button>
         </div>
