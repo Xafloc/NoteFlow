@@ -37,7 +37,7 @@ from . import sigils
 ###############################################################################
 # Constants & Configuration
 ###############################################################################
-__version__ = "0.7.4"
+__version__ = "0.7.5"
 NOTE_SEPARATOR = "\n<!-- note -->\n"
 APP_PORT = None
 CURRENT_THEME = "dark-orange" # Default theme

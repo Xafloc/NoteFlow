@@ -194,35 +194,49 @@ def convert_to_data_uri(content_bytes: bytes, content_type: Optional[str]) -> st
 ###############################################################################
 # Inlining passes
 ###############################################################################
-def inline_css_resources(session, css_content, base_url, cache=None, deadline=None):
-    done = False
-    while not done:
-        done = True
-        import_pattern = re.compile(r'@import\s+["\']([^"\']+)["\'];')
-        imports = import_pattern.findall(css_content)
-        for imp in imports:
-            if imp.startswith('data:'):
-                continue
-            done = False
-            css_url = urljoin(base_url, imp)
-            content, _ = fetch_resource(session, css_url, cache=cache, deadline=deadline)
-            if content:
-                sub_css = content.decode('utf-8', errors='replace')
-                sub_css = inline_css_resources(session, sub_css, css_url, cache=cache, deadline=deadline)
-                css_content = css_content.replace(f'@import "{imp}";', sub_css)
-            else:
-                css_content = css_content.replace(f'@import "{imp}";', '')
+_CSS_IMPORT_RE = re.compile(r'@import\s+["\']([^"\']+)["\']\s*;')
+_CSS_URL_RE = re.compile(r'url\(\s*["\']?([^)"\']+)["\']?\s*\)')
+_MAX_CSS_IMPORT_DEPTH = 5
 
-        url_pattern = re.compile(r'url\(["\']?([^)"\']+)["\']?\)')
-        urls = url_pattern.findall(css_content)
-        for u in urls:
-            if u.startswith('data:') or u.endswith('.map'):
-                continue
-            done = False
-            resource_url = urljoin(base_url, u)
-            cbytes, ctype = fetch_resource(session, resource_url, cache=cache, deadline=deadline)
-            if cbytes:
-                css_content = css_content.replace(f'url({u})', f'url({convert_to_data_uri(cbytes, ctype)})')
+
+def inline_css_resources(session, css_content, base_url, cache=None, deadline=None, _depth=0):
+    """Inline @import chains and url() references into a stylesheet.
+
+    Each match is rewritten exactly once via re.sub callbacks. The previous
+    implementation used a `while not done` re-scan loop with literal
+    str.replace; when the regex captured an unquoted URL but the source used
+    `url("...")`, the replace never matched, `done` stayed False, and the loop
+    spun forever (this hung archiving of CSS-heavy sites like foxnews.com).
+    re.sub replaces the actual matched text, so no re-scan is needed.
+    """
+    if _depth > _MAX_CSS_IMPORT_DEPTH:
+        return css_content
+
+    def repl_import(m):
+        imp = m.group(1)
+        if imp.startswith('data:'):
+            return m.group(0)
+        css_url = urljoin(base_url, imp)
+        content, _ = fetch_resource(session, css_url, cache=cache, deadline=deadline)
+        if not content:
+            return ''  # drop imports we couldn't fetch
+        sub_css = content.decode('utf-8', errors='replace')
+        return inline_css_resources(
+            session, sub_css, css_url, cache=cache, deadline=deadline, _depth=_depth + 1
+        )
+
+    def repl_url(m):
+        u = m.group(1)
+        if u.startswith('data:') or u.endswith('.map'):
+            return m.group(0)
+        resource_url = urljoin(base_url, u)
+        cbytes, ctype = fetch_resource(session, resource_url, cache=cache, deadline=deadline)
+        if not cbytes:
+            return m.group(0)  # leave the original reference untouched on failure
+        return f'url({convert_to_data_uri(cbytes, ctype)})'
+
+    css_content = _CSS_IMPORT_RE.sub(repl_import, css_content)
+    css_content = _CSS_URL_RE.sub(repl_url, css_content)
     return css_content
 
 
