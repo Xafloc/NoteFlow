@@ -36,7 +36,7 @@ from . import sigils
 ###############################################################################
 # Constants & Configuration
 ###############################################################################
-__version__ = "0.7.2"
+__version__ = "0.7.3"
 NOTE_SEPARATOR = "\n<!-- note -->\n"
 APP_PORT = None
 CURRENT_THEME = "dark-orange" # Default theme
@@ -236,6 +236,7 @@ def load_config():
         "theme": "dark-orange",
         "font_scales": _default_font_scales(),
         "autosave": _default_autosave(),
+        "archive_ssl_verify": True,
         "ai": dict(ai_module.DEFAULT_AI_CONFIG),
     }
 
@@ -257,6 +258,8 @@ def load_config():
                 "enabled": bool(raw_as.get("enabled", True)),
                 "interval": raw_as.get("interval", 1) if raw_as.get("interval") in AUTOSAVE_INTERVALS else 1,
             }
+            # Normalize archive SSL verification flag.
+            config['archive_ssl_verify'] = bool(config.get('archive_ssl_verify', True))
             # Normalize AI block — fill in any missing keys.
             config['ai'] = ai_module.merge_ai_config(config)
             with open(config_file, 'w') as f:
@@ -287,6 +290,8 @@ if CURRENT_THEME not in THEMES:
     CURRENT_THEME = 'dark-orange'
 FONT_SCALES = config.get('font_scales') or _default_font_scales()
 AUTOSAVE = config.get('autosave') or _default_autosave()
+ARCHIVE_SSL_VERIFY = bool(config.get('archive_ssl_verify', True))
+archiver.set_ssl_verify(ARCHIVE_SSL_VERIFY)
 AI_CONFIG = ai_module.merge_ai_config(config)
 
 def get_git_context(folder_path: Path) -> Dict:
@@ -1306,6 +1311,29 @@ async def set_autosave(request: Request):
     cfg['autosave'] = dict(AUTOSAVE)
     save_config(cfg)
     return {"status": "success", **AUTOSAVE}
+
+@app.get("/api/archive-ssl-verify")
+async def get_archive_ssl_verify():
+    """Return whether SSL certificate verification is enabled for archiving."""
+    return {"enabled": ARCHIVE_SSL_VERIFY}
+
+@app.post("/api/archive-ssl-verify")
+async def set_archive_ssl_verify(request: Request):
+    """Update the archive SSL-verify setting and persist it."""
+    global ARCHIVE_SSL_VERIFY
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected JSON object")
+
+    ARCHIVE_SSL_VERIFY = bool(body.get("enabled", ARCHIVE_SSL_VERIFY))
+    archiver.set_ssl_verify(ARCHIVE_SSL_VERIFY)
+    cfg = load_config()
+    cfg['archive_ssl_verify'] = ARCHIVE_SSL_VERIFY
+    save_config(cfg)
+    return {"status": "success", "enabled": ARCHIVE_SSL_VERIFY}
 
 @app.get("/api/git-context")
 async def api_git_context(request: Request):
@@ -3417,6 +3445,29 @@ HTML_TEMPLATE = """
             if (select) select.value = String(_autosaveInterval);
         }
 
+        let _archiveSslVerify = """ + ("true" if ARCHIVE_SSL_VERIFY else "false") + """;
+
+        async function saveArchiveSslVerify() {
+            const enabled = document.getElementById('archiveSslVerifyToggle').checked;
+            try {
+                const resp = await fetch('/api/archive-ssl-verify', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled})
+                });
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                _archiveSslVerify = enabled;
+            } catch (e) {
+                console.error('Error saving archive SSL setting:', e);
+                alert('Failed to save archiving settings');
+            }
+        }
+
+        function _initArchiveSslAdmin() {
+            const toggle = document.getElementById('archiveSslVerifyToggle');
+            if (toggle) toggle.checked = _archiveSslVerify;
+        }
+
         async function shutdownServer() {
             if (confirm('Are you sure you want to shutdown this server instance?')) {
                 try {
@@ -4168,6 +4219,7 @@ HTML_TEMPLATE = """
             // the actual theme and font sizes are applied via server-rendered
             // CSS variables, so the page already looks correct.
             _initAutosaveAdmin();
+            _initArchiveSslAdmin();
             document.getElementById('noteContent').addEventListener('input', _autosaveMaybeStart);
             document.getElementById('noteTitle').addEventListener('input', _autosaveMaybeStart);
 
@@ -4651,6 +4703,23 @@ Markdown basics:
                 </select>
             </div>
             <button class="pane-button" onclick="saveAutosaveSettings()">Save autosave</button>
+
+            <hr style="border:none;border-top:1px solid rgba(255,255,255,0.1);margin:16px 0;">
+
+            <label class="pane-label">Site archiving</label>
+            <p class="pane-help" style="margin-top:0;">
+                Verify SSL certificates when archiving a webpage (+https link).
+                Turn this off only if you are behind a corporate firewall or
+                proxy that intercepts HTTPS and archiving fails with a
+                certificate verification error. Disabling skips certificate
+                checks for archive fetches, which is less secure.
+            </p>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                <label style="display:flex;align-items:center;gap:6px;font-size:0.8rem;cursor:pointer;">
+                    <input type="checkbox" id="archiveSslVerifyToggle"> Verify SSL certificates
+                </label>
+            </div>
+            <button class="pane-button" onclick="saveArchiveSslVerify()">Save archiving</button>
 
             <div style="flex:1;"></div>
             <button class="pane-button danger" onclick="shutdownServer()">Shutdown server</button>

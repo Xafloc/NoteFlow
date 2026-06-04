@@ -42,6 +42,39 @@ MAX_RESOURCE_BYTES = 8 * 1024 * 1024  # skip resources larger than 8 MiB
 MAX_WORKERS = 12               # concurrent prefetch workers
 MAX_PREFETCH = 32              # hard cap on URLs we prefetch up front
 
+# SSL certificate verification for outbound fetches. Defaults to on; can be
+# turned off (e.g. behind a corporate TLS-inspection proxy whose private root
+# CA isn't in certifi's bundle) via set_ssl_verify(False).
+SSL_VERIFY = True
+
+
+def set_ssl_verify(enabled: bool) -> None:
+    """Toggle SSL certificate verification for all archive fetches.
+
+    When disabled, urllib3's InsecureRequestWarning is silenced so the console
+    isn't flooded once per resource fetched.
+    """
+    global SSL_VERIFY
+    SSL_VERIFY = bool(enabled)
+    if not SSL_VERIFY:
+        try:
+            from urllib3.exceptions import InsecureRequestWarning
+            requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+        except Exception:
+            pass
+
+
+def _new_session() -> requests.Session:
+    """Create a session preconfigured with our UA and SSL-verify setting.
+
+    Setting session.verify once applies to every request made through it.
+    """
+    session = requests.Session()
+    session.headers.update({'User-Agent': 'Mozilla/5.0'})
+    session.verify = SSL_VERIFY
+    return session
+
+
 IGNORED_DOMAINS = {
     'metrics.',
     'analytics.',
@@ -307,8 +340,7 @@ def inline_html_resources(session, soup, base_url, cache=None, deadline=None):
 
 
 def inline_all_resources(url: str, source_html: str) -> str:
-    session = requests.Session()
-    session.headers.update({'User-Agent': 'Mozilla/5.0'})
+    session = _new_session()
     base_url = urljoin(url, '/')
 
     cache: Dict[str, Tuple[Optional[bytes], Optional[str]]] = {}
@@ -368,8 +400,12 @@ def _run_external_archiver(binary: str, url: str) -> Optional[str]:
                 "--no-audio",
                 "--no-video",
                 "-t", "25",
-                url,
             ]
+            # Behind a TLS-inspection proxy, skip cert validation to match the
+            # in-process fetcher's verify setting.
+            if not SSL_VERIFY:
+                cmd.append("-k")  # monolith: --insecure
+            cmd.append(url)
         elif binary == "obelisk":
             # obelisk wants -o; "-" sends to stdout on most builds.
             cmd = [binary, "-o", "-", url]
@@ -413,8 +449,7 @@ def archive_website(url: str, folder_path: Path) -> Optional[Dict[str, str]]:
         archive_dir = folder_path / "assets" / "sites"
         archive_dir.mkdir(parents=True, exist_ok=True)
 
-        session = requests.Session()
-        session.headers.update({'User-Agent': 'Mozilla/5.0'})
+        session = _new_session()
 
         # Always fetch the page once with requests so we can read <title>,
         # <meta>, etc. for the sidecar metadata file — even if we delegate
