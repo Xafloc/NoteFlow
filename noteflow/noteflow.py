@@ -5,6 +5,7 @@ import os
 import sys
 import re
 import json
+import asyncio
 import html
 import mimetypes
 import argparse
@@ -36,7 +37,7 @@ from . import sigils
 ###############################################################################
 # Constants & Configuration
 ###############################################################################
-__version__ = "0.7.3"
+__version__ = "0.7.4"
 NOTE_SEPARATOR = "\n<!-- note -->\n"
 APP_PORT = None
 CURRENT_THEME = "dark-orange" # Default theme
@@ -1028,7 +1029,9 @@ async def archive_webpage(request: Request, url: str):
     """Archive a webpage"""
 
     folder_path = request.app.state.folder_path
-    result = archiver.archive_website(url, folder_path)
+    # archive_website() is blocking (network + subprocess); run it off the
+    # event loop so a slow/hung archive can't freeze the whole app.
+    result = await asyncio.to_thread(archiver.archive_website, url, folder_path)
     if result:
         return {"status": "success", "data": result}
     return {"status": "error", "message": "Failed to archive webpage"}

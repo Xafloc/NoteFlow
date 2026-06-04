@@ -14,6 +14,7 @@ Public surface:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import re
 import time
@@ -546,7 +547,9 @@ async def process_plus_links(content: str, folder_path: Path, app_port: Optional
                 'markdown': f'{url} *(self-referencing link removed)*',
             }
 
-        result = archive_website(url, folder_path)
+        # archive_website() is blocking; offload to a thread so saving a note
+        # that contains +links doesn't block the event loop.
+        result = await asyncio.to_thread(archive_website, url, folder_path)
         if result:
             return result
         return {'html': url, 'markdown': url}
