@@ -37,7 +37,7 @@ from . import sigils
 ###############################################################################
 # Constants & Configuration
 ###############################################################################
-__version__ = "0.7.5"
+__version__ = "0.7.6"
 NOTE_SEPARATOR = "\n<!-- note -->\n"
 APP_PORT = None
 CURRENT_THEME = "dark-orange" # Default theme
@@ -230,7 +230,11 @@ def _clamp_font_scale(value) -> float:
     return max(FONT_SCALE_MIN, min(FONT_SCALE_MAX, v))
 
 def load_config():
-    """Load configuration from JSON file or create default if not exists."""
+    """Load configuration from JSON file or create default if not exists.
+
+    Only rewrites the file when normalization actually changes values, so
+    startup (and concurrent tools) don't thrash the config on every load.
+    """
     config_file = get_config_file()
 
     default_config = {
@@ -244,7 +248,8 @@ def load_config():
     try:
         if config_file.exists():
             with open(config_file, 'r') as f:
-                config = json.load(f)
+                raw = json.load(f)
+            config = dict(raw) if isinstance(raw, dict) else {}
             if config.get('theme') not in THEMES:
                 print(f"Warning: Theme '{config.get('theme')}' not found, defaulting to dark-orange")
                 config['theme'] = default_config['theme']
@@ -263,8 +268,9 @@ def load_config():
             config['archive_ssl_verify'] = bool(config.get('archive_ssl_verify', True))
             # Normalize AI block — fill in any missing keys.
             config['ai'] = ai_module.merge_ai_config(config)
-            with open(config_file, 'w') as f:
-                json.dump(config, f, indent=4)
+            if config != raw:
+                with open(config_file, 'w') as f:
+                    json.dump(config, f, indent=4)
             return config
         else:
             with open(config_file, 'w') as f:
@@ -366,6 +372,7 @@ class NoteManager:
         self.file_path: Optional[Path] = None
         self.needs_save: bool = False
         self.base_path = base_path
+        self._file_mtime: Optional[float] = None
         self._load_notes()
 
     def _load_notes(self):
@@ -373,6 +380,10 @@ class NoteManager:
         self.file_path = self.base_path / "notes.md"
         if not self.file_path.exists():
             self.file_path.write_text("")
+            self._file_mtime = self.file_path.stat().st_mtime
+            self.notes = []
+            self.checkbox_index = 0
+            self.needs_save = False
             return
 
         try:
@@ -391,11 +402,17 @@ class NoteManager:
         content = content.replace('\r\n', '\n').replace('\r', '\n')
 
         self._parse_notes(content)
+        try:
+            self._file_mtime = self.file_path.stat().st_mtime
+        except OSError:
+            self._file_mtime = None
+        self.needs_save = False
 
     def _parse_notes(self, content: str):
         """Parse raw content into Note objects"""
         self.notes = []
-        
+        self.checkbox_index = 0
+
         # Split content by note separator and parse each note
         raw_notes = [n.strip() for n in content.split(NOTE_SEPARATOR) if n.strip()]
         for raw_note in raw_notes:
@@ -405,13 +422,74 @@ class NoteManager:
                 note = Note.from_text(raw_note, self)
                 self.notes.append(note)
 
+    def reindex_tasks(self):
+        """Rebuild contiguous task indexes after structural edits.
+
+        Task IDs are session-local counters used by checkboxes. Without a
+        full reindex, Note.update() would keep allocating new IDs forever.
+        """
+        self.checkbox_index = 0
+        for note in self.notes:
+            note.tasks = []
+            note._html_cache = None
+            note._parse_tasks()
+
+    def disk_changed(self) -> bool:
+        """True if notes.md on disk is newer than our last load/save."""
+        if not self.file_path or not self.file_path.exists():
+            return False
+        try:
+            mtime = self.file_path.stat().st_mtime
+        except OSError:
+            return False
+        if self._file_mtime is None:
+            return True
+        # Float mtimes can jitter slightly; 1ms slack avoids false positives.
+        return mtime > (self._file_mtime + 0.001)
+
+    def reload_if_changed(self, force: bool = False) -> bool:
+        """Reload notes.md when an external editor changed it.
+
+        Skips reload while we have unsaved in-memory edits (unless force)
+        so autosave/typing aren't clobbered by a concurrent write race.
+        Returns True if notes were reloaded.
+        """
+        if self.needs_save and not force:
+            return False
+        if not force and not self.disk_changed():
+            return False
+        self._load_notes()
+        return True
+
     def save(self):
-        """Save notes to disk if modified"""
-        if self.needs_save:
-            content = self.render_notes()
-            with open(self.file_path, 'w', encoding='utf-8', newline='\n') as f:
+        """Atomically save notes to disk if modified.
+
+        Writes to a sibling temp file then os.replace() so a crash mid-write
+        cannot leave a truncated notes.md.
+        """
+        if not self.needs_save:
+            return
+        content = self.render_notes()
+        path = self.file_path
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        try:
+            with open(tmp_path, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+            try:
+                self._file_mtime = path.stat().st_mtime
+            except OSError:
+                self._file_mtime = time.time()
             self.needs_save = False
+        except Exception:
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+            raise
 
     def render_notes(self) -> str:
         """Render all notes with proper indexing"""
@@ -420,12 +498,33 @@ class NoteManager:
             rendered.append(note.render())
         return NOTE_SEPARATOR.join(rendered)
 
+    def build_task_lookup(self) -> Dict[str, int]:
+        """Map normalized task line text → task index (first match wins)."""
+        lookup: Dict[str, int] = {}
+        for note in self.notes:
+            for task in note.tasks:
+                key = normalize_list_markers(task.text.strip())
+                if key not in lookup:
+                    lookup[key] = task.index
+        return lookup
+
     def get_active_tasks(self) -> List[Dict]:
-        """Return all unchecked tasks"""
+        """Return all unchecked tasks, priority-flagged first.
+
+        Tasks carrying a !p1/!p2/!p3 marker sort ahead of unflagged tasks,
+        in ascending priority order (p1 highest). The sort is stable, so
+        within a tier tasks keep their original note order.
+        """
+        self.reload_if_changed()
         tasks = []
         for note in self.notes:
             tasks.extend(note.get_unchecked_tasks())
-        return tasks
+
+        def priority_rank(task: Dict) -> int:
+            match = re.search(r'(?:^|\s)!p([1-3])\b', task['text'], re.IGNORECASE)
+            return int(match.group(1)) if match else 4
+
+        return sorted(tasks, key=priority_rank)
 
     def remove_asset_references(self, filename: str):
         """Remove all markdown image/link references to a given asset filename."""
@@ -438,6 +537,7 @@ class NoteManager:
             new_content = pattern.sub('', note.content)
             if new_content != note.content:
                 note.content = new_content
+                note._html_cache = None
                 changed = True
         if changed:
             self.needs_save = True
@@ -452,12 +552,14 @@ class NoteManager:
             manager=self
         )
         self.notes.insert(0, note)  # Add to start of list
+        self.reindex_tasks()
         self.needs_save = True
 
     def update_task(self, task_index: int, checked: bool):
         """Update task completion status"""
         for note in self.notes:
             if note.update_task(task_index, checked):
+                note._html_cache = None
                 self.needs_save = True
                 return True
         return False
@@ -478,6 +580,7 @@ class Note:
         self.timestamp = timestamp
         self.manager = manager
         self.tasks: List[Task] = []
+        self._html_cache: Optional[tuple] = None  # (content, html)
         self._parse_tasks()
 
     @classmethod
@@ -518,26 +621,20 @@ class Note:
 
     @staticmethod
     def _code_regions(text: str) -> List[tuple]:
-        """Return (start, end) byte offsets covering markdown code regions.
+        """Return (start, end) offsets covering markdown code regions.
 
-        Covers fenced code blocks (``` ... ``` or ~~~ ... ~~~) and inline
-        code spans (`...`). Used to mask out checkbox markers that are
-        actually part of documentation rather than real tasks.
+        Shared implementation lives in folders.py so task scanners stay in
+        lockstep; this wrapper keeps call sites on Note unchanged.
         """
-        regions = []
-        # Fenced blocks first — they take precedence over inline spans inside them.
-        fence_re = re.compile(r'(^|\n)(```|~~~)[^\n]*\n.*?\n\2(?=\n|$)', re.DOTALL)
-        for m in fence_re.finditer(text):
-            regions.append((m.start(), m.end()))
+        return folders_module._code_regions(text)
 
-        # Inline spans — single, double, or triple backtick spans on one line.
-        inline_re = re.compile(r'(`+)[^`\n]+?\1')
-        for m in inline_re.finditer(text):
-            pos = m.start()
-            if any(s <= pos < e for s, e in regions):
-                continue  # Already covered by a fenced block
-            regions.append((m.start(), m.end()))
-        return regions
+    def rendered_html(self) -> str:
+        """Markdown→HTML for this note, cached until content changes."""
+        if self._html_cache is not None and self._html_cache[0] == self.content:
+            return self._html_cache[1]
+        html_out = parse_markdown(self.content)
+        self._html_cache = (self.content, html_out)
+        return html_out
 
     def _extract_task_text(self, checkbox_pos: int) -> str:
         """Extract the full text of a task item"""
@@ -589,11 +686,11 @@ class Note:
         return False
 
     def update(self, title: str, content: str):
-        """Update note content and title"""
+        """Update note content and title, then reindex all task IDs."""
         self.title = title
         self.content = content
-        self.tasks = []
-        self._parse_tasks()
+        self._html_cache = None
+        self.manager.reindex_tasks()
         self.manager.needs_save = True
 
 class Task:
@@ -661,177 +758,201 @@ def set_app_port(port: int):
     global APP_PORT
     APP_PORT = port
 
-def parse_markdown(content: str) -> str:
-    """Convert markdown to HTML with proper task handling and extended features"""
+# Leading glyphs that look like a bullet but aren't a markdown list marker.
+# These commonly arrive when notes are pasted from Word/Outlook/Teams, whose
+# autocorrect turns "- " into an en-dash, etc. markdown-it only treats ASCII
+# '-', '*' and '+' as bullets, so without normalization these lines render as
+# plain paragraphs (no bullet) instead of a list.
+_BULLET_LOOKALIKES = (
+    '‐‑‒–—―'  # hyphen/dash variants, en/em dash
+    '−'                                # minus sign
+    '•‣⁃∙·●◦․'  # bullet/dot glyphs
+)
+_BULLET_LOOKALIKE_RE = re.compile(r'^(\s*)[' + _BULLET_LOOKALIKES + r'](\s+)')
+
+
+def normalize_list_markers(text: str) -> str:
+    """Convert leading bullet look-alike glyphs into real markdown hyphens.
+
+    Only a line-leading glyph followed by whitespace is rewritten, so dashes
+    used inside prose are untouched. Fenced code blocks are skipped so code
+    samples render verbatim.
+    """
+    out = []
+    in_fence = False
+    for line in text.split('\n'):
+        stripped = line.lstrip()
+        if stripped.startswith('```') or stripped.startswith('~~~'):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if not in_fence:
+            line = _BULLET_LOOKALIKE_RE.sub(lambda m: m.group(1) + '-' + m.group(2), line)
+        out.append(line)
+    return '\n'.join(out)
+
+
+# Module-level task lookup used during markdown render. Populated by
+# get_notes / callers before parse_markdown so checkbox matching is O(1)
+# instead of scanning every task for every checkbox.
+_TASK_LOOKUP: Dict[str, int] = {}
+_MD_PARSER: Optional[MarkdownIt] = None
+
+
+def set_task_lookup(lookup: Optional[Dict[str, int]] = None):
+    """Install the task-line → index map used by the checkbox renderer."""
+    global _TASK_LOOKUP
+    _TASK_LOOKUP = lookup or {}
+
+
+def _render_math(tokens, idx, options, env):
+    token = tokens[idx]
+    body = token.content
+    if token.type == 'math_block':
+        return f'<div class="math-display">\\[{body}\\]</div>'
+    return f'<span class="math-inline">\\({body}\\)</span>'
+
+
+def _render_image(tokens, idx, options, env):
+    token = tokens[idx]
+    src = (token.attrGet('src') or '').strip('<>')
+    alt = token.content
+    title = token.attrGet('title')
+
+    if src.startswith(('http://', 'https://')) or '/assets/images/' in src:
+        img_url = src if src.startswith(('http://', 'https://', '/')) else f'/{src}'
+        title_attr = f' title="{title}"' if title else ''
+        escaped_url = html.escape(img_url, quote=True)
+
+        delete_btn = ''
+        if '/assets/images/' in img_url:
+            delete_btn = (
+                f'<button class="image-delete-btn" '
+                f'data-image-path="{escaped_url}" '
+                f'title="Delete image">&times;</button>'
+            )
+
+        return (
+            f'<div class="image-container">'
+            f'<img src="{img_url}" alt="{html.escape(alt)}"{title_attr} '
+            f'class="clickable-image" data-full-src="{escaped_url}">'
+            f'{delete_btn}'
+            f'</div>'
+        )
+
+    filename = os.path.basename(src)
+    return (
+        f'<a href="{html.escape(src, quote=True)}" target="_blank" '
+        f'rel="noopener noreferrer" class="file-link">📎 {html.escape(filename)}</a>'
+    )
+
+
+def _render_blockquote_open(tokens, idx, options, env):
+    return '<blockquote class="markdown-blockquote">'
+
+
+def _render_blockquote_close(tokens, idx, options, env):
+    return '</blockquote>'
+
+
+def _checkbox_replace(state, silent):
+    pos = state.pos
+    max_pos = state.posMax
+
+    if (pos + 3 > max_pos or
+            state.src[pos] != '[' or
+            state.src[pos + 2] != ']' or
+            state.src[pos + 1] not in [' ', 'x', 'X']):
+        return False
+
+    if silent:
+        return False
+
+    checked = state.src[pos + 1].lower() == 'x'
+
+    line_start = pos
+    while line_start > 0 and state.src[line_start - 1] != '\n':
+        line_start -= 1
+
+    line_end = pos
+    while line_end < max_pos and state.src[line_end] != '\n':
+        line_end += 1
+
+    # Source is already normalized by parse_markdown; lookup keys are too.
+    task_text = state.src[line_start:line_end].strip()
+    task_index = _TASK_LOOKUP.get(task_text)
+    if task_index is None:
+        # Fallback for callers that didn't install a lookup (AI render, etc.)
+        try:
+            for note in note_manager.notes:
+                for task in note.tasks:
+                    if task_text == normalize_list_markers(task.text.strip()):
+                        task_index = task.index
+                        break
+                if task_index is not None:
+                    break
+        except NameError:
+            task_index = None
+
+    token = state.push('checkbox_inline', 'input', 0)
+    token.markup = state.src[pos:pos + 3]
+    token.attrs = token.attrs or []
+    token.attrs.append(['checked', 'true' if checked else 'false'])
+    token.attrs.append(['task_index', str(task_index) if task_index is not None else None])
+
+    state.pos = pos + 3
+    return True
+
+
+def _render_checkbox(tokens, idx, options, env):
+    token = tokens[idx]
+    attrs = dict(token.attrs or {})
+    checked = attrs.get('checked') == 'true'
+    task_index = attrs.get('task_index')
+
+    if task_index == 'None' or task_index is None:
+        return f'<input type="checkbox" {"checked" if checked else ""} disabled>'
+
+    return (f'<input type="checkbox" {"checked" if checked else ""} '
+            f'data-checkbox-index="{task_index}" '
+            f'id="task_{task_index}" name="task_{task_index}">')
+
+
+def _get_md_parser() -> MarkdownIt:
+    """Build (once) the shared MarkdownIt instance used for all note renders."""
+    global _MD_PARSER
+    if _MD_PARSER is not None:
+        return _MD_PARSER
+
     md = MarkdownIt('zero')
-    
-    # Enable core features
-    md.enable('table')        # Enable tables
-    md.enable('emphasis')     # Enable bold/italic
-    md.enable('link')         # Enable links
-    md.enable('paragraph')    # Enable paragraphs
-    md.enable('heading')      # Enable headings
-    md.enable('list')         # Enable lists
-    md.enable('image')        # Enable images
-    md.enable('code')         # Enable code blocks
-    md.enable('fence')        # Enable fenced code blocks
-    md.enable('blockquote')   # Enable blockquotes
-    md.enable('strikethrough')# ~~strikethrough text~~
-    md.enable('escape')       # Backslash escapes
-    md.enable('backticks')    # Extended backtick features
-    md.enable('html_block')   # Enable HTML blocks
-    md.enable('inline')       # Enable inline-level rules
-   
-    # Use the dollar math plugin
+    for rule in (
+        'table', 'emphasis', 'link', 'paragraph', 'heading', 'list',
+        'image', 'code', 'fence', 'blockquote', 'strikethrough', 'escape',
+        'backticks', 'html_block', 'inline',
+    ):
+        md.enable(rule)
     md.use(dollarmath_plugin, allow_digits=False)
 
-    # Define the render_math function to handle math tokens
-    def render_math(tokens, idx, options, env):
-        token = tokens[idx]
-        content = token.content
-        is_block = token.type == 'math_block'
-        
-        if is_block:
-            return f'<div class="math-display">\\[{content}\\]</div>'
-        else:
-            return f'<span class="math-inline">\\({content}\\)</span>'
-        
-    # Set the math renderers
-    md.renderer.rules['math_inline'] = render_math
-    md.renderer.rules['math_block'] = render_math
+    md.inline.ruler.before('text', 'checkbox', _checkbox_replace)
+    md.renderer.rules['checkbox_inline'] = _render_checkbox
+    md.renderer.rules['image'] = _render_image
+    md.renderer.rules['blockquote_open'] = _render_blockquote_open
+    md.renderer.rules['blockquote_close'] = _render_blockquote_close
+    md.renderer.rules['math_inline'] = _render_math
+    md.renderer.rules['math_block'] = _render_math
 
-    # Custom renderers
-    def render_image(tokens, idx, options, env):
-        token = tokens[idx]
-        src = token.attrGet('src')
-        alt = token.content
-        title = token.attrGet('title')
+    _MD_PARSER = md
+    return md
 
-        # Remove angle brackets if present (from drag-and-drop)
-        src = src.strip('<>')
 
-        # Handle both local and remote images
-        if src.startswith(('http://', 'https://')) or '/assets/images/' in src:
-            img_url = src if src.startswith(('http://', 'https://', '/')) else f'/{src}'
-            title_attr = f' title="{title}"' if title else ''
-            escaped_url = html.escape(img_url, quote=True)
+def parse_markdown(content: str) -> str:
+    """Convert markdown to HTML with proper task handling and extended features.
 
-            delete_btn = ''
-            if '/assets/images/' in img_url:
-                delete_btn = (
-                    f'<button class="image-delete-btn" '
-                    f'data-image-path="{escaped_url}" '
-                    f'title="Delete image">&times;</button>'
-                )
-
-            return (
-                f'<div class="image-container">'
-                f'<img src="{img_url}" alt="{alt}"{title_attr} '
-                f'class="clickable-image" data-full-src="{escaped_url}">'
-                f'{delete_btn}'
-                f'</div>'
-            )
-        else:
-            # For non-image files, render as a regular link
-            filename = os.path.basename(src)
-            return (
-                f'<a href="{src}" target="_blank" rel="noopener noreferrer" '
-                f'class="file-link">📎 {filename}</a>'
-            )
-
-    def render_blockquote_open(tokens, idx, options, env):
-        return '<blockquote class="markdown-blockquote">'
-
-    def render_blockquote_close(tokens, idx, options, env):
-        return '</blockquote>'
-
-    def render_math(tokens, idx, options, env):
-        token = tokens[idx]
-        content = token.content
-        is_block = token.type == 'math_block'
-        
-        if is_block:
-            return f'<div class="math-display">\\[{content}\\]</div>'
-        else:
-            return f'<span class="math-inline">\\({content}\\)</span>'
-
-    # Custom checkbox rule
-    def checkbox_replace(state, silent):
-        pos = state.pos
-        max_pos = state.posMax
-        
-        # Check for checkbox pattern
-        if (pos + 3 > max_pos or 
-            state.src[pos] != '[' or 
-            state.src[pos + 2] != ']' or 
-            state.src[pos + 1] not in [' ', 'x', 'X']):
-            return False
-            
-        # Don't process if we're just scanning
-        if silent:
-            return False
-            
-        checked = state.src[pos + 1].lower() == 'x'
-        
-        # Get the full line for task matching
-        line_start = pos
-        while line_start > 0 and state.src[line_start - 1] != '\n':
-            line_start -= 1
-        
-        line_end = pos
-        while line_end < max_pos and state.src[line_end] != '\n':
-            line_end += 1
-            
-        task_text = state.src[line_start:line_end].strip()
-        
-        # Find matching task
-        task_index = None
-        for note in note_manager.notes:
-            for task in note.tasks:
-                if task_text == task.text.strip():
-                    task_index = task.index
-                    break
-            if task_index is not None:
-                break
-                
-        # Create token
-        token = state.push('checkbox_inline', 'input', 0)
-        token.markup = state.src[pos:pos + 3]
-        token.attrs = token.attrs or []
-        token.attrs.append(['checked', 'true' if checked else 'false'])
-        token.attrs.append(['task_index', str(task_index) if task_index is not None else None])
-        
-        # Update parser position
-        state.pos = pos + 3
-        return True
-        
-    # Custom checkbox renderer
-    def render_checkbox(tokens, idx, options, env):
-        token = tokens[idx]
-        checked = dict(token.attrs or {}).get('checked') == 'true'
-        task_index = dict(token.attrs or {}).get('task_index')
-        
-        if task_index == 'None' or task_index is None:
-            return f'<input type="checkbox" {"checked" if checked else ""} disabled>'
-        
-        return (f'<input type="checkbox" {"checked" if checked else ""} '
-                f'data-checkbox-index="{task_index}" '
-                f'id="task_{task_index}" name="task_{task_index}">')
-    
-    # Add the custom rule
-    md.inline.ruler.before('text', 'checkbox', checkbox_replace)
-    md.renderer.rules['checkbox_inline'] = render_checkbox
-    
-    # Set custom renderers
-    md.renderer.rules['image'] = render_image
-    md.renderer.rules['blockquote_open'] = render_blockquote_open
-    md.renderer.rules['blockquote_close'] = render_blockquote_close
-    md.renderer.rules['math_inline'] = render_math
-    md.renderer.rules['math_block'] = render_math
-    
-    # Convert to HTML
-    rendered = md.render(content)
-    return rendered
+    Reuses a single MarkdownIt instance across calls. Call set_task_lookup()
+    before rendering notes so checkboxes resolve to stable task indexes in O(1).
+    """
+    content = normalize_list_markers(content)
+    return _get_md_parser().render(content)
 
 def validate_folder_path(folder_path_input: Optional[str] = None) -> Path:
     """
@@ -882,18 +1003,21 @@ async def favicon():
 # Note routes
 @app.get("/api/notes")
 async def get_notes():
-    """Get all notes"""
-    content = note_manager.render_notes()
-    notes = [note.strip() for note in content.split(NOTE_SEPARATOR) if note.strip()]
-    
+    """Get all notes as HTML.
+
+    Reloads from disk when an external editor changed notes.md, reuses a
+    shared MarkdownIt parser, and serves per-note HTML from a content cache.
+    """
+    note_manager.reload_if_changed()
+    set_task_lookup(note_manager.build_task_lookup())
+
     html_notes = []
-    for note_index, note in enumerate(notes):
-        lines = note.split('\n')
-        timestamp = lines[0].replace('## ', '')  # Remove markdown header
-        note_content = '\n'.join(lines[1:])
-        
-        rendered_content = parse_markdown(note_content)
-        
+    for note_index, note in enumerate(note_manager.notes):
+        timestamp = note.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        if note.title:
+            timestamp = f"{timestamp} - {note.title}"
+        rendered_content = note.rendered_html()
+
         html_note = """
         <div class="section-container">
             <div id="note-{note_index}" class="notes-item markdown-body">
@@ -916,12 +1040,23 @@ async def get_notes():
         </div>
         """.format(
             note_index=note_index,
-            timestamp=timestamp,
+            timestamp=html.escape(timestamp),
             rendered_content=rendered_content
         )
         html_notes.append(html_note)
-    
+
     return HTMLResponse(''.join(html_notes))
+
+
+@app.get("/api/notes/status")
+async def notes_status():
+    """Lightweight poll for external notes.md changes (no full render)."""
+    changed = note_manager.disk_changed() and not note_manager.needs_save
+    return {
+        "changed": changed,
+        "count": len(note_manager.notes),
+        "needs_save": note_manager.needs_save,
+    }
 
 @app.post("/api/notes")
 async def add_note(request: Request, title: str = Form(...), content: str = Form(...)):
@@ -951,6 +1086,7 @@ async def delete_note(note_index: int = FastAPIPath(...)):
         if 0 <= note_index < len(note_manager.notes):
             # Remove the note at the specified index
             note_manager.notes.pop(note_index)
+            note_manager.reindex_tasks()
             note_manager.needs_save = True
             note_manager.save()
             return {"status": "success"}
@@ -1003,23 +1139,27 @@ async def get_tasks():
 
 @app.post("/api/tasks/{task_index}")
 async def update_task(request: Request, task_index: int = FastAPIPath(...)):
-    """Update task status"""
+    """Update task status without forcing a full notes re-render on the client."""
     try:
         data = await request.json()
-        # print(f"Debug - Received data: {data}")  # Debug the incoming data
-        # print(f"Debug - Task index: {task_index}")  # Debug the task index
-        
         checked = data.get('checked', False)
-        
+
         success = note_manager.update_task(task_index, checked)
         if success:
             note_manager.save()
-            return JSONResponse({"status": "success"})
+            return JSONResponse({
+                "status": "success",
+                "task_index": task_index,
+                "checked": checked,
+                # Active tasks list is small; include it so the client can
+                # refresh the sidebar without a second round-trip.
+                "active_tasks": note_manager.get_active_tasks(),
+            })
         return JSONResponse({"status": "error", "message": "Task not found"})
     except Exception as e:
-        print(f"Debug - Error in update_task: {str(e)}")
+        print(f"Error in update_task: {str(e)}")
         return JSONResponse(
-            {"status": "error", "message": str(e)}, 
+            {"status": "error", "message": str(e)},
             status_code=500
         )
 
@@ -1399,6 +1539,7 @@ async def search_notes(request: Request, q: str = ""):
     the results inline; this endpoint stays cheap by scanning in-memory
     notes rather than re-reading notes.md.
     """
+    note_manager.reload_if_changed()
     query = (q or "").strip()
     if not query:
         return {"query": "", "matches": []}
@@ -1510,8 +1651,14 @@ async def api_ai_ask(request: Request):
     if not isinstance(user_messages, list) or not user_messages:
         raise HTTPException(status_code=400, detail="Expected {'messages': [...]}")
     context = (body or {}).get("context") or AI_CONFIG.get("default_context", "all")
-    folder_path = request.app.state.folder_path
-    messages = ai_module.build_messages(user_messages, context, folder_path)
+    selection = (body or {}).get("selection")
+    # Prefer the in-memory notes (already loaded / possibly unsaved) over a
+    # disk re-read so chat reflects the editor session.
+    note_manager.reload_if_changed()
+    notes_text = note_manager.render_notes()
+    messages = ai_module.build_messages(
+        user_messages, context, notes_text=notes_text, selection=selection,
+    )
     return StreamingResponse(
         ai_module.stream_chat(AI_CONFIG, messages),
         media_type="text/event-stream",
@@ -1555,19 +1702,48 @@ async def api_ai_history_delete(entry_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Entry not found")
     return {"status": "success"}
 
+def _safe_upload_filename(raw_name: Optional[str]) -> str:
+    """Return a basename-only filename safe to write under assets/.
+
+    Strips path components, rejects empty / dot-only names, and falls back
+    to a generic name when the client sent nothing useful.
+    """
+    name = Path(raw_name or "").name.strip()
+    if not name or name in (".", "..") or name.startswith("."):
+        # Keep extension if we can salvage one from the raw input.
+        ext = Path(raw_name or "").suffix
+        if ext and ext not in (".", "..") and "/" not in ext and "\\" not in ext:
+            name = f"upload{ext}"
+        else:
+            name = "upload.bin"
+    # Collapse any residual path separators that slipped through on odd platforms.
+    name = name.replace("/", "_").replace("\\", "_").replace("\x00", "")
+    return name or "upload.bin"
+
+
+def _unique_path(directory: Path, filename: str) -> Path:
+    """If `filename` exists, append -1, -2, … before the extension."""
+    candidate = directory / filename
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    n = 1
+    while True:
+        alt = directory / f"{stem}-{n}{suffix}"
+        if not alt.exists():
+            return alt
+        n += 1
+
+
 @app.post("/api/upload-file")
 async def upload_file(request: Request, file: UploadFile = File(...)):
-    # Get file extension and MIME type
-    extension = os.path.splitext(file.filename)[1].lower()
-    content_type = file.content_type or mimetypes.guess_type(file.filename)[0]
+    safe_name = _safe_upload_filename(file.filename)
+    content_type = file.content_type or mimetypes.guess_type(safe_name)[0]
 
-    # Retrieve folder_path from app.state
     folder_path = request.app.state.folder_path
+    is_image = bool(content_type and content_type.startswith('image/'))
 
-    # Determine if it's an image
-    is_image = content_type and content_type.startswith('image/')
-
-    # Choose appropriate directory based on file type
     if is_image:
         assets_path = folder_path / "assets" / "images"
         relative_path = "images"
@@ -1575,18 +1751,33 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         assets_path = folder_path / "assets" / "files"
         relative_path = "files"
 
-    # Create directory if it doesn't exist
     assets_path.mkdir(parents=True, exist_ok=True)
+    file_path = _unique_path(assets_path, safe_name)
 
-    # Save the file
-    file_path = assets_path / file.filename
+    # Stream to disk with a hard size cap (50 MiB) so a runaway upload
+    # can't fill the disk from a local misclick.
+    max_bytes = 50 * 1024 * 1024
+    written = 0
     with file_path.open("wb") as buffer:
-        buffer.write(await file.read())
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_bytes:
+                buffer.close()
+                try:
+                    file_path.unlink()
+                except OSError:
+                    pass
+                raise HTTPException(status_code=413, detail="File exceeds 50 MiB limit")
+            buffer.write(chunk)
 
     return {
-        "filePath": f"/assets/{relative_path}/{file.filename}",
+        "filePath": f"/assets/{relative_path}/{file_path.name}",
         "isImage": is_image,
-        "contentType": content_type
+        "contentType": content_type,
+        "name": file_path.name,
     }
 
 @app.delete("/api/delete-image")
@@ -2030,7 +2221,13 @@ THEMED_STYLES = """
             margin-bottom: 0.1rem;
         }}
         .markdown-body li {{
-            margin-bottom: 0.1rem;
+            margin-bottom: 0.25rem;
+        }}
+        /* A blank line between bullets makes markdown render a "loose" list,
+           wrapping each item's text in a <p>. Give those paragraphs room so
+           blank lines in the source produce a visible gap in the render. */
+        .markdown-body li > p {{
+            margin: 0.5rem 0;
         }}
         .markdown-body input[type="checkbox"] {{
             margin-right: 0.5rem;
@@ -2046,7 +2243,7 @@ THEMED_STYLES = """
             color: {colors[text_color]};
         }}
         .markdown-body p {{
-            margin: 5px 0;
+            margin: 0.6rem 0;
         }}
         .markdown-body a {{
             color: {colors[link_color]} !important;
@@ -3326,53 +3523,74 @@ HTML_TEMPLATE = """
             return out.join('');
         }
 
+        function renderActiveTasksList(tasks) {
+            const tasksContainer = document.getElementById('activeTasks');
+            if (!tasksContainer) return;
+            tasksContainer.innerHTML = tasks.length
+                ? ''
+                : '<div style="opacity:0.5;font-style:italic;">No active tasks</div>';
+
+            tasks.forEach(task => {
+                const taskElement = document.createElement('div');
+                taskElement.className = 'task-item';
+                taskElement.innerHTML =
+                    '<input type="checkbox" data-checkbox-index="' + task.index +
+                    '" id="task_' + task.index + '_active">' +
+                    '<label for="task_' + task.index + '_active">' +
+                      renderTaskText(task.text) + '</label>';
+                tasksContainer.appendChild(taskElement);
+            });
+
+            tasksContainer.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+                checkbox.addEventListener('change', handleCheckboxChange);
+            });
+        }
+
         async function updateActiveTasks() {
             try {
                 const response = await fetch('/api/tasks');
                 const tasks = await response.json();
-                const tasksContainer = document.getElementById('activeTasks');
-
-                tasksContainer.innerHTML = tasks.length
-                    ? ''
-                    : '<div style="opacity:0.5;font-style:italic;">No active tasks</div>';
-
-                tasks.forEach(task => {
-                    const taskElement = document.createElement('div');
-                    taskElement.className = 'task-item';
-                    taskElement.innerHTML =
-                        '<input type="checkbox" data-checkbox-index="' + task.index +
-                        '" id="task_' + task.index + '_active">' +
-                        '<label for="task_' + task.index + '_active">' +
-                          renderTaskText(task.text) + '</label>';
-                    tasksContainer.appendChild(taskElement);
-                });
-
-                tasksContainer.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
-                    checkbox.addEventListener('change', handleCheckboxChange);
-                });
+                renderActiveTasksList(tasks);
             } catch (error) {
                 console.error('Error updating tasks:', error);
             }
         }
 
+        function syncCheckboxDom(taskIndex, checked) {
+            // Keep every checkbox for this task (note body + active-tasks pane)
+            // in sync without re-rendering Markdown or re-running MathJax.
+            document.querySelectorAll(
+                'input[type="checkbox"][data-checkbox-index="' + taskIndex + '"]'
+            ).forEach((el) => {
+                el.checked = checked;
+            });
+        }
+
         async function handleCheckboxChange(event) {
             const checkbox = event.target;
             const taskIndex = checkbox.getAttribute('data-checkbox-index');
-            
+            const checked = checkbox.checked;
+            // Optimistic sync across panes; roll back on failure.
+            syncCheckboxDom(taskIndex, checked);
+
             try {
-                await fetch(`/api/tasks/${taskIndex}`, {
+                const resp = await fetch(`/api/tasks/${taskIndex}`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({checked: checkbox.checked})
+                    body: JSON.stringify({checked: checked})
                 });
-                
-                await updateNotes();
-                await updateActiveTasks();
-                const notesContainer = document.getElementById('notesContainer');
-                await typeset(notesContainer);
+                const data = await resp.json();
+                if (!resp.ok || data.status !== 'success') {
+                    throw new Error((data && data.message) || 'Task update failed');
+                }
+                if (Array.isArray(data.active_tasks)) {
+                    renderActiveTasksList(data.active_tasks);
+                } else {
+                    await updateActiveTasks();
+                }
             } catch (error) {
                 console.error('Error updating task:', error);
-                checkbox.checked = !checkbox.checked; // Revert on error
+                syncCheckboxDom(taskIndex, !checked);
             }
         }
 
@@ -3581,6 +3799,8 @@ HTML_TEMPLATE = """
 
         // ---- Search (local + global) ----------------------------------------
         let _searchTimer = null;
+        let _searchAbort = null;
+        let _notesPollTimer = null;
         let _searchGlobal = false;
         let _searchHitIndex = -1;
         function escapeHtml(s) {
@@ -3623,11 +3843,16 @@ HTML_TEMPLATE = """
             if (!query) {
                 resultsBox.style.display = 'none';
                 resultsBox.innerHTML = '';
+                if (_searchAbort) { try { _searchAbort.abort(); } catch (e) {} }
                 return;
             }
+            // Cancel any in-flight search so fast typing doesn't race results.
+            if (_searchAbort) { try { _searchAbort.abort(); } catch (e) {} }
+            _searchAbort = new AbortController();
+            const signal = _searchAbort.signal;
             try {
                 if (_searchGlobal) {
-                    const resp = await fetch('/api/search/global?q=' + encodeURIComponent(query));
+                    const resp = await fetch('/api/search/global?q=' + encodeURIComponent(query), {signal});
                     const data = await resp.json();
                     if (!data.results.length) {
                         resultsBox.innerHTML = '<div class="hit"><em>No matches across folders.</em></div>';
@@ -3644,7 +3869,7 @@ HTML_TEMPLATE = """
                         )).join('');
                     }
                 } else {
-                    const resp = await fetch('/api/search?q=' + encodeURIComponent(query));
+                    const resp = await fetch('/api/search?q=' + encodeURIComponent(query), {signal});
                     const data = await resp.json();
                     if (!data.matches.length) {
                         resultsBox.innerHTML = '<div class="hit"><em>No matches.</em></div>';
@@ -3672,7 +3897,36 @@ HTML_TEMPLATE = """
                 }
                 resultsBox.style.display = 'block';
             } catch (e) {
+                if (e && e.name === 'AbortError') return;
                 console.error('Search failed:', e);
+            }
+        }
+
+        function editorIsDirty() {
+            const ta = document.getElementById('noteContent');
+            if (!ta) return false;
+            if (ta.getAttribute('data-edit-index') !== null) return true;
+            return (ta.value || '').trim().length > 0;
+        }
+
+        async function pollNotesChanged() {
+            // Pick up external edits to notes.md without a full page reload.
+            // Skip while the user is mid-edit so we don't blow away drafts.
+            if (editorIsDirty() || document.hidden) return;
+            try {
+                const resp = await fetch('/api/notes/status');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                if (data.changed) {
+                    await updateNotes();
+                    await updateActiveTasks();
+                    const notesContainer = document.getElementById('notesContainer');
+                    if (notesContainer && typeof typeset === 'function') {
+                        await typeset(notesContainer);
+                    }
+                }
+            } catch (e) {
+                // Silent — polling is best-effort.
             }
         }
 
@@ -3990,7 +4244,20 @@ HTML_TEMPLATE = """
             aiAppendMessage('user', '<b>You</b><br>' + escapeHtml(question));
 
             const placeholder = aiAppendMessage('assistant', aiThinkingMarkup(0));
-            const ctx = document.getElementById('aiContext').value;
+            let ctx = document.getElementById('aiContext').value;
+            let selection = null;
+            const noteTa = document.getElementById('noteContent');
+            // Resolve dynamic context modes from the editor state.
+            if (ctx === 'editing') {
+                const editIndex = noteTa ? noteTa.getAttribute('data-edit-index') : null;
+                ctx = (editIndex !== null) ? ('note:' + editIndex) : 'recent:1';
+            } else if (ctx === 'selection') {
+                if (noteTa && noteTa.selectionStart !== noteTa.selectionEnd) {
+                    selection = noteTa.value.substring(noteTa.selectionStart, noteTa.selectionEnd);
+                } else if (noteTa) {
+                    selection = noteTa.value;
+                }
+            }
 
             // Cycle the "thinking..." dots + seconds counter once per second
             // so the user can see the request hasn't stalled out.
@@ -4010,10 +4277,12 @@ HTML_TEMPLATE = """
             _aiAbort = new AbortController();
             let accumulated = '';
             try {
+                const payload = {messages: _aiMessages, context: ctx};
+                if (selection !== null) payload.selection = selection;
                 const resp = await fetch('/api/ai/ask', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({messages: _aiMessages, context: ctx}),
+                    body: JSON.stringify(payload),
                     signal: _aiAbort.signal,
                 });
                 if (!resp.ok || !resp.body) {
@@ -4345,6 +4614,10 @@ HTML_TEMPLATE = """
                     else if (e.key === 'Enter') { e.preventDefault(); searchNavigate(1); }
                 });
             }
+
+            // Poll for external notes.md changes (other editors / CLI append).
+            if (_notesPollTimer) clearInterval(_notesPollTimer);
+            _notesPollTimer = setInterval(pollNotesChanged, 4000);
 
             // Git context badge stays visible on the directory bar regardless
             // of the side panel state, so it loads on initial page mount.
@@ -4742,9 +5015,15 @@ Markdown basics:
                         <label style="font-size:0.65rem;opacity:0.7;">context:</label>
                         <select id="aiContext">
                             <option value="all">all notes</option>
-                            <option value="200">last 200 lines</option>
-                            <option value="100">last 100 lines</option>
-                            <option value="50">last 50 lines</option>
+                            <option value="recent:10">recent 10 notes</option>
+                            <option value="recent:5">recent 5 notes</option>
+                            <option value="recent:1">most recent note</option>
+                            <option value="editing">note being edited</option>
+                            <option value="selection">editor selection</option>
+                            <option value="200">top 200 lines</option>
+                            <option value="100">top 100 lines</option>
+                            <option value="50">top 50 lines</option>
+                            <option value="none">no notes context</option>
                         </select>
                         <button onclick="aiNewChat()">New chat</button>
                         <button class="send" onclick="aiSend()">Send</button>
@@ -4766,9 +5045,13 @@ Markdown basics:
                     <label>Default context</label>
                     <select id="aiDefaultContext">
                         <option value="all">all notes</option>
-                        <option value="200">last 200 lines</option>
-                        <option value="100">last 100 lines</option>
-                        <option value="50">last 50 lines</option>
+                        <option value="recent:10">recent 10 notes</option>
+                        <option value="recent:5">recent 5 notes</option>
+                        <option value="recent:1">most recent note</option>
+                        <option value="200">top 200 lines</option>
+                        <option value="100">top 100 lines</option>
+                        <option value="50">top 50 lines</option>
+                        <option value="none">no notes context</option>
                     </select>
                     <button class="pane-button" onclick="aiSaveSettings()">Save settings</button>
                 </div>
@@ -4822,6 +5105,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Port to bind to. If omitted or in use, NoteFlow scans upward from 8000.",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help=(
+            "Interface to bind (default: 127.0.0.1 = localhost only). "
+            "Use 0.0.0.0 to expose on the LAN — there is no authentication."
+        ),
     )
     parser.add_argument(
         "--no-browser",
@@ -4878,18 +5169,27 @@ def main():
 
         port = find_free_port(args.port) if args.port else find_free_port()
         set_app_port(port)
+        host = args.host or "127.0.0.1"
+        # Prefer a loopback URL for the browser even when bound to 0.0.0.0.
+        browser_host = "127.0.0.1" if host in ("0.0.0.0", "::", "[::]") else host
 
         log_config = uvicorn.config.LOGGING_CONFIG
-        log_config["loggers"]["uvicorn.access"]["level"] = "DEBUG"
+        log_config["loggers"]["uvicorn.access"]["level"] = "INFO"
 
         if not args.no_browser:
-            _open_browser_when_ready(f"http://127.0.0.1:{port}/")
+            _open_browser_when_ready(f"http://{browser_host}:{port}/")
+
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            print(
+                f"Warning: binding to {host} — NoteFlow has no authentication. "
+                "Any client that can reach this port can read/write notes and call AI."
+            )
 
         uvicorn.run(
             app,
-            host="0.0.0.0",
+            host=host,
             port=port,
-            log_level="debug",
+            log_level="info",
             log_config=log_config,
             access_log=False,
         )

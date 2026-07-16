@@ -249,28 +249,32 @@ class FolderRegistry:
         regions = _code_regions(content)
         note_title = ""
         note_timestamp = ""
+        # Walk lines with a running byte offset — O(n). The previous
+        # implementation re-split the whole file for each line (O(n²)).
+        offset = 0
         for line_no, line in enumerate(content.splitlines(), start=1):
-            offset_start = sum(len(s) + 1 for s in content.splitlines()[:line_no - 1])
-            offset_end = offset_start + len(line)
-            if any(s <= offset_start < e or s < offset_end <= e for s, e in regions):
+            offset_end = offset + len(line)
+            if any(s <= offset < e or s < offset_end <= e for s, e in regions):
+                offset = offset_end + 1  # +1 for the '\n' consumed by splitlines
                 continue
             header = NOTE_HEADER_RE.match(line)
             if header:
                 note_timestamp = header.group(1)
                 note_title = header.group(2) or ""
+                offset = offset_end + 1
                 continue
             m = CHECKBOX_RE.match(line)
-            if not m:
-                continue
-            checked = m.group(2).lower() == 'x'
-            out.append({
-                'line_number': line_no,
-                'content': line,
-                'completed': checked,
-                'task_hash': hash_task(line),
-                'note_title': note_title,
-                'note_timestamp': note_timestamp,
-            })
+            if m:
+                checked = m.group(2).lower() == 'x'
+                out.append({
+                    'line_number': line_no,
+                    'content': line,
+                    'completed': checked,
+                    'task_hash': hash_task(line),
+                    'note_title': note_title,
+                    'note_timestamp': note_timestamp,
+                })
+            offset = offset_end + 1
         return out
 
     # -- queries ---------------------------------------------------------

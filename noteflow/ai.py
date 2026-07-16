@@ -86,6 +86,12 @@ def apply_update(ai_cfg: Dict, body: Dict) -> Dict:
 ###############################################################################
 # Prompt assembly
 ###############################################################################
+NOTE_SEPARATOR = "\n<!-- note -->\n"
+# Soft cap so a multi-year notes.md can't blow past common context windows.
+# ~120k characters ≈ ~30–40k tokens depending on the tokenizer.
+CONTEXT_CHAR_BUDGET = 120_000
+
+
 def _read_notes_md(folder_path: Path) -> str:
     notes_md = folder_path / "notes.md"
     if not notes_md.exists():
@@ -97,27 +103,93 @@ def _read_notes_md(folder_path: Path) -> str:
     return content.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def select_context(
+    notes_text: str,
+    context: str,
+    selection: Optional[str] = None,
+) -> str:
+    """Pick a slice of notes.md based on the context mode.
+
+    Modes:
+      - ``all``            — entire notes file (subject to char budget)
+      - ``none`` / ``off`` — no notes context
+      - ``N`` (int)        — first N lines (newest notes are prepended, so
+                             this is "most recent N lines of the file")
+      - ``recent:N``       — first N note blocks
+      - ``note:N``         — single note by 0-based index
+      - ``selection``      — use the ``selection`` argument (editor highlight
+                             or full editor buffer)
+
+    Always applies CONTEXT_CHAR_BUDGET so huge journals don't fail upstream.
+    """
+    ctx = (context or "all").strip().lower()
+    notes_text = notes_text or ""
+
+    if ctx in ("none", "off", "empty"):
+        return ""
+
+    if ctx == "selection":
+        included = (selection or "").strip()
+        if not included:
+            included = notes_text  # fall back rather than send an empty prompt
+    elif ctx.startswith("recent:"):
+        try:
+            n = int(ctx.split(":", 1)[1])
+        except ValueError:
+            n = 5
+        parts = [p for p in notes_text.split(NOTE_SEPARATOR) if p.strip()]
+        included = NOTE_SEPARATOR.join(parts[: max(0, n)])
+    elif ctx.startswith("note:"):
+        try:
+            idx = int(ctx.split(":", 1)[1])
+        except ValueError:
+            idx = -1
+        parts = [p for p in notes_text.split(NOTE_SEPARATOR) if p.strip()]
+        included = parts[idx] if 0 <= idx < len(parts) else ""
+    elif ctx == "all":
+        included = notes_text
+    else:
+        try:
+            n = int(ctx)
+            included = "\n".join(notes_text.splitlines()[: max(0, n)])
+        except ValueError:
+            included = notes_text
+
+    if len(included) > CONTEXT_CHAR_BUDGET:
+        included = (
+            included[:CONTEXT_CHAR_BUDGET]
+            + "\n\n[... truncated to fit context budget ...]"
+        )
+    return included
+
+
 def build_messages(
     user_messages: List[Dict],
     context: str,
-    folder_path: Path,
+    folder_path: Optional[Path] = None,
+    notes_text: Optional[str] = None,
+    selection: Optional[str] = None,
 ) -> List[Dict]:
-    """Prepend a system prompt with the user's notes as context."""
-    notes_text = _read_notes_md(folder_path)
-    if not notes_text:
-        system_body = (
-            "You are NoteFlow's AI assistant. The user's notes.md is currently empty."
-        )
-    else:
-        ctx = (context or "all").strip().lower()
-        if ctx == "all":
-            included = notes_text
+    """Prepend a system prompt with the user's notes as context.
+
+    Prefer passing ``notes_text`` (in-memory render) so chat sees unsaved
+    edits. Falls back to reading ``folder_path/notes.md`` when omitted.
+    """
+    if notes_text is None:
+        notes_text = _read_notes_md(folder_path) if folder_path else ""
+
+    included = select_context(notes_text, context, selection=selection)
+    if not included:
+        if (context or "").strip().lower() in ("none", "off", "empty"):
+            system_body = (
+                "You are NoteFlow's AI assistant. The user opted out of notes "
+                "context for this question — answer from general knowledge."
+            )
         else:
-            try:
-                n = int(ctx)
-                included = "\n".join(notes_text.splitlines()[: max(0, n)])
-            except ValueError:
-                included = notes_text
+            system_body = (
+                "You are NoteFlow's AI assistant. The user's notes.md is currently empty."
+            )
+    else:
         system_body = (
             "You are NoteFlow's AI assistant. The user's notes (a markdown "
             "file split by `<!-- note -->` delimiters) are below. Answer "

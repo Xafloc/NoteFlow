@@ -370,12 +370,34 @@ def inline_all_resources(url: str, source_html: str) -> str:
     for _ in range(5):  # bounded number of passes
         if time.time() > deadline:
             break
-        before = str(soup)
+        # Count external resource attrs before/after instead of serializing
+        # the whole document twice per pass (str(soup) is expensive on big pages).
+        before_ext = _count_external_refs(soup)
         soup = inline_html_resources(session, soup, base_url, cache=cache, deadline=deadline)
-        if str(soup) == before:
+        after_ext = _count_external_refs(soup)
+        if after_ext == 0 or after_ext >= before_ext:
+            # Fully inlined, or no progress this pass.
             break
 
     return str(soup)
+
+
+def _count_external_refs(soup) -> int:
+    """Cheap progress metric for the inlining loop (not a full serialize)."""
+    n = 0
+    for tag in soup.find_all(True):
+        for attr in ("src", "href", "data"):
+            val = tag.get(attr)
+            if not val or not isinstance(val, str):
+                continue
+            if val.startswith("data:") or val.startswith("#") or val.startswith("mailto:"):
+                continue
+            if val.startswith("http://") or val.startswith("https://") or val.startswith("//") or val.startswith("/"):
+                n += 1
+        style = tag.get("style")
+        if style and ("url(" in style) and ("data:" not in style):
+            n += 1
+    return n
 
 
 ###############################################################################

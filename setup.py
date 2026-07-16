@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='noteflow',
-    version='0.7.5',
+    version='0.7.6',
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
@@ -14,7 +14,6 @@ setup(
         'beautifulsoup4>=4.12.0',
         'pydantic>=2.4.2',
         'python-multipart>=0.0.6',
-        'jinja2>=3.1.2',
         'platformdirs>=3.0.0',
         'psutil>=5.9.5',
     ],
