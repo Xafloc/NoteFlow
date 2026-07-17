@@ -6,6 +6,18 @@ NoteFlow is a lightweight, Markdown-based note-taking application with task mana
 
 ## What's new
 
+### 0.7.6 — Performance, safety & capability
+
+- **Faster checkbox toggles** — flipping a task no longer re-renders every note or re-runs MathJax; the active-tasks panel updates from the response.
+- **Shared MarkdownIt + per-note HTML cache** — note rendering reuses a single parser and caches HTML until content changes.
+- **Atomic `notes.md` saves** — write via a temp file + replace so a crash mid-save cannot truncate your notes.
+- **Localhost by default** — server binds to `127.0.0.1`; use `--host 0.0.0.0` only if you intentionally want LAN access (there is no authentication).
+- **Hardened uploads** — basename-only filenames, automatic collision renames (`photo-1.png`), 50 MiB size cap.
+- **External edit awareness** — edits to `notes.md` from other tools (or `noteflow append`) are picked up via mtime polling while the editor is idle.
+- **Richer AI context** — recent N notes, note being edited, editor selection, no-notes mode, plus a char budget so huge journals don't blow the context window.
+- **Abortable search** — in-flight search requests cancel when you keep typing.
+- **First unit tests** — `python -m unittest tests.test_core -v`.
+
 ### 0.7.0 — Autosave
 
 - **Autosave** — notes are automatically saved at a configurable interval (1, 3, or 5 minutes). Works for both new and existing notes — the timer starts as soon as you type in the editor. On by default; toggle and configure in the admin panel. A brief "autosaved" indicator flashes next to the Save button after each save.
@@ -38,7 +50,7 @@ A major release that backports the feature surface from [noteflow-go](https://gi
 - **Local + global search** — press `/` anywhere to focus search; results jump to matching notes.
 - **Git context** — branch + short SHA badge in the directory bar, plus a commits panel showing recent `git log`.
 - **Code-region-aware task parsing** — checkboxes inside fenced or inline code blocks are no longer mis-parsed as real tasks.
-- **CLI flags** — `--help`, `--version`, `--port`, `--no-browser`.
+- **CLI flags** — `--help`, `--version`, `--port`, `--host`, `--no-browser`.
 
 ## Screenshots
 
@@ -63,7 +75,7 @@ A major release that backports the feature surface from [noteflow-go](https://gi
 - **✅ Active task tracking** — checkboxes in any note surface to a dedicated panel
 - **🔖 Inline task metadata** — `!p1` priorities, `@YYYY-MM-DD` due dates, `#tag` tags, rendered as colored chips
 - **🌐 Cross-folder global tasks** — register multiple project folders, see every open task in one place
-- **🤖 AI assist** — chat your notes via any OpenAI-compatible endpoint
+- **🤖 AI assist** — chat your notes via any OpenAI-compatible endpoint; context modes include all / recent N / editing / selection / none
 - **💾 Autosave** — automatic periodic save while editing (configurable interval, toggleable in admin)
 - **⌨️ Smart Enter** — list markers, indentation, and numbered-list continuation while you type
 - **📖 Cheat sheet** — press `?` for a quick-reference overlay of shortcuts, syntax, and sigils
@@ -72,8 +84,8 @@ A major release that backports the feature surface from [noteflow-go](https://gi
 - **🔗 Web archiving** — prefix any URL with `+` to save a self-contained local copy
 - **📎 File embed sigil** — `+file:path#10-25` embeds source code at save time
 - **🚀 CLI** — `noteflow append`, `noteflow tasks` with filters / saved views / JSON output
-- **💾 Zero database for notes** — your note history lives in one portable Markdown file (cross-folder task index uses SQLite for speed)
-- **🔒 Privacy first** — runs entirely local; AI key never sent to the browser; no cloud or account
+- **💾 Zero database for notes** — your note history lives in one portable Markdown file (cross-folder task index uses SQLite for speed); atomic saves protect against mid-write crashes
+- **🔒 Privacy first** — runs entirely local (binds to localhost by default); AI key never sent to the browser; no cloud or account
 - **🎨 Multiple themes** — dark-orange, dark-blue, light-blue
 - **🔢 Math** — MathJax inline (`$...$`) and block (`$$...$$`)
 - **🖥️ Multiple instances** — run NoteFlow in any number of folders concurrently
@@ -114,11 +126,14 @@ noteflow
 # Or point at a specific folder
 noteflow /path/to/notes
 
-# Or, for the demo content
+# Pin port / skip browser / expose on LAN (no auth — use carefully)
+noteflow --port 8765 --no-browser
+noteflow --host 0.0.0.0 --port 8765
+
 noteflow --help
 ```
 
-Your browser opens automatically at `http://localhost:8000` (or the next free port). Use `--no-browser` to suppress, `--port 8765` to pin a specific port.
+Your browser opens automatically at `http://127.0.0.1:8000` (or the next free port). The server binds to **localhost only** by default. Use `--no-browser` to suppress the tab, `--port 8765` to pin a port, and `--host 0.0.0.0` only if you intentionally want LAN access (there is no authentication).
 
 ## Daily use
 
@@ -177,9 +192,20 @@ Click the **ai** tab on the right edge → **Settings**. Fill in:
   - LM Studio local: `http://localhost:1234/v1/chat/completions`
 - **API key** — stored in `~/.config/noteflow-py/noteflow.json` (or the macOS equivalent). Never sent to the browser.
 - **Model** — e.g. `gpt-4o-mini`, `claude-sonnet-4-5`, `llama3.2`.
-- **Default context** — "all notes" sends every byte of `notes.md` as the system prompt; "last N lines" trims it.
+- **Default context** — how much of `notes.md` to include by default (all notes, recent N notes, top N lines, or none).
 
-The AI sees *this folder's* `notes.md` as a system prompt, plus your conversation. Click **Save to history** on any answer to keep it in `ai_history.md`.
+Per-question **context** in the chat pane can further narrow to:
+
+| Mode | What the model sees |
+|------|---------------------|
+| all notes | Entire `notes.md` (soft-capped by a char budget) |
+| recent N notes | Newest N note blocks |
+| note being edited | The note currently open in the editor |
+| editor selection | Highlighted text in the note editor (or the whole buffer if nothing is selected) |
+| top N lines | First N lines of the file (newest content is prepended) |
+| no notes context | General knowledge only |
+
+The AI sees *this folder's* notes as a system prompt, plus your conversation. Click **Save to history** on any answer to keep it in `ai_history.md`.
 
 ### Keyboard shortcuts
 
