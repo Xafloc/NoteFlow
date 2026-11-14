@@ -821,7 +821,7 @@ def _render_image(tokens, idx, options, env):
 
     if src.startswith(('http://', 'https://')) or '/assets/images/' in src:
         img_url = src if src.startswith(('http://', 'https://', '/')) else f'/{src}'
-        title_attr = f' title="{title}"' if title else ''
+        title_attr = f' title="{html.escape(title, quote=True)}"' if title else ''
         escaped_url = html.escape(img_url, quote=True)
 
         delete_btn = ''
@@ -834,7 +834,7 @@ def _render_image(tokens, idx, options, env):
 
         return (
             f'<div class="image-container">'
-            f'<img src="{img_url}" alt="{html.escape(alt)}"{title_attr} '
+            f'<img src="{escaped_url}" alt="{html.escape(alt)}"{title_attr} '
             f'class="clickable-image" data-full-src="{escaped_url}">'
             f'{delete_btn}'
             f'</div>'
