@@ -1,0 +1,25 @@
+noteflow/__init__.py
+  s_4fa49b1f0d4a12::t_1c3c27667e958c 3
+noteflow/noteflow.py
+  s_4fa49b1f0d4a12::t_3a146a305c053c 40
+pyproject.toml
+  s_4fa49b1f0d4a12::t_e749c618459d48 7
+setup.py
+  s_4fa49b1f0d4a12::t_cfa47f62f0c671 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed9b9a3b586a4ddcd628f3edc4ce8e815133c49a",
+  "prompts": {},
+  "sessions": {
+    "s_4fa49b1f0d4a12": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "90d5b8d7-0e84-43f0-83af-3233d8ca4f98",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Xafloc <xafloc@rego.ai>"
+    }
+  }
+}
